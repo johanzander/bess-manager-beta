@@ -182,7 +182,9 @@ async def patch_settings(updates: dict):
 
             elif store_key == "growatt":
                 if "device_id" in section:
-                    bess_controller.ha_controller.growatt_device_id = section["device_id"]
+                    bess_controller.ha_controller.growatt_device_id = section[
+                        "device_id"
+                    ]
 
             elif store_key == "sensors":
                 bess_controller.ha_controller.sensors.update(
@@ -403,8 +405,13 @@ async def get_dashboard_data(
 
         # Guard: if no schedule exists yet the system is still initializing.
         if not bess_controller.system.schedule_store.get_latest_schedule():
-            logger.info("Dashboard requested before schedule is ready — returning initializing state")
-            return {"error": "initializing", "message": "System is initializing. The optimization schedule will be ready shortly."}
+            logger.info(
+                "Dashboard requested before schedule is ready — returning initializing state"
+            )
+            return {
+                "error": "initializing",
+                "message": "System is initializing. The optimization schedule will be ready shortly.",
+            }
 
         # Get daily view data (always quarterly internally)
         daily_view = bess_controller.system.get_current_daily_view()
@@ -530,7 +537,7 @@ async def get_dashboard_data(
 
         # Strategic intent summary from actual schedule data
         try:
-            schedule_manager = bess_controller.system._schedule_manager
+            schedule_manager = bess_controller.system._inverter_controller
             strategic_summary_data = schedule_manager.get_strategic_intent_summary()
             # Convert to count format expected by frontend
             strategic_summary = {
@@ -1206,7 +1213,8 @@ async def get_decision_intelligence_mock():
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
-# Add growatt endpoints for inverter status and detailed schedule
+# Canonical inverter endpoints (/api/inverter/*) plus legacy /api/growatt/* aliases
+@router.get("/api/inverter/status")
 @router.get("/api/growatt/inverter_status")
 async def get_inverter_status():
     """Get comprehensive real-time inverter status data."""
@@ -1233,7 +1241,7 @@ async def get_inverter_status():
         current_battery_mode = "load_first"  # Default
         try:
             current_hour = time_utils.now().hour
-            schedule_manager = bess_controller.system._schedule_manager
+            schedule_manager = bess_controller.system._inverter_controller
             hourly_settings = schedule_manager.get_hourly_settings(current_hour)
             current_battery_mode = hourly_settings.get("batt_mode", "load_first")
         except Exception as e:
@@ -1246,6 +1254,8 @@ async def get_inverter_status():
         battery_charge_power = controller.get_battery_charge_power()
         battery_discharge_power = controller.get_battery_discharge_power()
 
+        inverter_platform = bess_controller.system.inverter_platform
+
         response = {
             "battery_soc": battery_soc,
             "battery_soe": battery_soe,
@@ -1253,9 +1263,10 @@ async def get_inverter_status():
             "battery_discharge_power": battery_discharge_power,
             "battery_mode": current_battery_mode,
             "grid_charge_enabled": grid_charge_enabled,
-            "charge_stop_soc": 100.0,
+            "charge_stop_soc": battery_settings.max_soc,
             "discharge_stop_soc": battery_settings.min_soc,
             "discharge_power_rate": discharge_power_rate,
+            "inverter_platform": inverter_platform,
             "timestamp": datetime.now().isoformat(),
         }
 
@@ -1267,13 +1278,14 @@ async def get_inverter_status():
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
+@router.get("/api/inverter/schedule")
 @router.get("/api/growatt/detailed_schedule")
 async def get_growatt_detailed_schedule():
     """Get detailed Growatt-specific schedule information with strategic intents."""
     from app import bess_controller
 
     try:
-        schedule_manager = bess_controller.system._schedule_manager
+        schedule_manager = bess_controller.system._inverter_controller
         current_hour = time_utils.now().hour
 
         # Get TOU intervals directly from schedule manager
@@ -1353,7 +1365,9 @@ async def get_growatt_detailed_schedule():
                         "batteryMode": battery_mode,
                         "grid_charge": hourly_settings.get("grid_charge", False),
                         "discharge_rate": hourly_settings.get("discharge_rate", 100),
-                        "dischargePowerRate": hourly_settings.get("discharge_rate", 100),
+                        "dischargePowerRate": hourly_settings.get(
+                            "discharge_rate", 100
+                        ),
                         "chargePowerRate": 100,
                         "strategic_intent": strategic_intent,
                         "intent_description": schedule_manager._get_intent_description(
@@ -1362,7 +1376,9 @@ async def get_growatt_detailed_schedule():
                         "action": action,
                         "action_color": action_color,
                         "battery_action": battery_action,
-                        "battery_action_kw": hourly_settings.get("battery_action_kw", 0.0),
+                        "battery_action_kw": hourly_settings.get(
+                            "battery_action_kw", 0.0
+                        ),
                         "batteryCharged": battery_charged,
                         "batteryDischarged": battery_discharged,
                         "price": price,
@@ -1472,8 +1488,11 @@ async def get_growatt_detailed_schedule():
             logger.warning(f"Failed to get tomorrow's period groups: {e}")
             tomorrow_period_groups = None
 
+        inverter_platform = bess_controller.system.inverter_platform
+
         response = {
             "current_hour": current_hour,
+            "inverter_platform": inverter_platform,
             "tou_intervals": tou_intervals,
             "schedule_data": schedule_data,
             "period_groups": period_groups,
@@ -1510,13 +1529,13 @@ async def get_tou_settings():
                 status_code=503, detail="Battery system not initialized"
             )
 
-        if bess_controller.system._schedule_manager is None:
+        if bess_controller.system._inverter_controller is None:
             logger.error("Schedule manager not initialized")
             raise HTTPException(
                 status_code=503, detail="Schedule manager not initialized"
             )
 
-        schedule_manager = bess_controller.system._schedule_manager
+        schedule_manager = bess_controller.system._inverter_controller
         tou_intervals = schedule_manager.get_all_tou_segments()
         current_hour = time_utils.now().hour
 
@@ -1574,13 +1593,13 @@ async def get_strategic_intents():
                 status_code=503, detail="Battery system not initialized"
             )
 
-        if bess_controller.system._schedule_manager is None:
+        if bess_controller.system._inverter_controller is None:
             logger.error("Schedule manager not initialized")
             raise HTTPException(
                 status_code=503, detail="Schedule manager not initialized"
             )
 
-        schedule_manager = bess_controller.system._schedule_manager
+        schedule_manager = bess_controller.system._inverter_controller
 
         # Get strategic intent summary
         strategic_summary = schedule_manager.get_strategic_intent_summary()
@@ -1907,7 +1926,7 @@ async def get_prediction_comparison(
 
         # Get current Growatt schedule
         current_growatt_schedule = (
-            bess_controller.system._schedule_manager.tou_intervals.copy()
+            bess_controller.system._inverter_controller.tou_intervals.copy()
         )
 
         # Analyze deviations
@@ -2360,8 +2379,16 @@ async def run_setup_discovery():
             # Identify which BESS sensor keys were not discovered
             all_bess_keys = list(ha.ENTITY_SUFFIX_MAP.values())
             missing_sensors = [k for k in all_bess_keys if k not in sensors]
+        elif integrations["solax_found"] and integrations["solax_device_prefix"]:
+            sensors = ha.discover_solax_sensors(
+                integrations["solax_device_prefix"], states
+            )
+            all_bess_keys = list(ha.SOLAX_ENTITY_SUFFIX_MAP.values())
+            missing_sensors = [k for k in all_bess_keys if k not in sensors]
         else:
-            logger.warning("Growatt integration not found during setup discovery")
+            logger.warning(
+                "No supported inverter integration found during setup discovery"
+            )
 
         current_sensors = ha.discover_current_sensors(states)
         for phase_key, entity_id in current_sensors.items():
@@ -2385,6 +2412,8 @@ async def run_setup_discovery():
                 "growatt_found": integrations["growatt_found"],
                 "device_sn": integrations["device_sn"],
                 "growatt_device_id": integrations["growatt_device_id"],
+                "solax_found": integrations["solax_found"],
+                "solax_device_prefix": integrations["solax_device_prefix"],
                 "nordpool_found": integrations["nordpool_found"],
                 "nordpool_area": integrations["nordpool_area"],
                 "nordpool_config_entry_id": integrations["nordpool_config_entry_id"],
@@ -2502,7 +2531,9 @@ async def setup_complete(payload: APISetupCompletePayload):
             if payload.cycleCost is not None:
                 battery["cycle_cost_per_kwh"] = payload.cycleCost
             if payload.minActionProfitThreshold is not None:
-                battery["min_action_profit_threshold"] = payload.minActionProfitThreshold
+                battery["min_action_profit_threshold"] = (
+                    payload.minActionProfitThreshold
+                )
             sections["battery"] = battery
 
         # --- home ---
@@ -2550,11 +2581,23 @@ async def setup_complete(payload: APISetupCompletePayload):
 
         # --- inverter ---
         if payload.inverterType is not None:
-            inv = bess_controller.settings_store.get_section("growatt")
-            inv["inverter_type"] = payload.inverterType
-            if payload.growattDeviceId:
-                inv["device_id"] = payload.growattDeviceId
-            sections["growatt"] = inv
+            # Map UI inverter type values to canonical inverter.platform keys
+            _platform_map = {
+                "MIN": "growatt_min",
+                "SPH": "growatt_sph",
+                "SOLAX": "solax",
+            }
+            _platform = _platform_map.get(payload.inverterType.upper(), "growatt_min")
+            inv_section = bess_controller.settings_store.get_section("inverter")
+            inv_section["platform"] = _platform
+            sections["inverter"] = inv_section
+            # Keep legacy growatt section updated for backward compat
+            if _platform in ("growatt_min", "growatt_sph"):
+                growatt_section = bess_controller.settings_store.get_section("growatt")
+                growatt_section["inverter_type"] = payload.inverterType.upper()
+                if payload.growattDeviceId:
+                    growatt_section["device_id"] = payload.growattDeviceId
+                sections["growatt"] = growatt_section
 
         # Persist all sections atomically
         bess_controller.settings_store.save_all(sections)
@@ -2574,34 +2617,40 @@ async def setup_complete(payload: APISetupCompletePayload):
 
         live_updates: dict = {}
         if "battery" in sections:
-            live_updates["battery"] = _nn({
-                "totalCapacity": payload.totalCapacity,
-                "minSoc": payload.minSoc,
-                "maxSoc": payload.maxSoc,
-                "maxChargePowerKw": payload.maxChargeDischargePower,
-                "maxDischargePowerKw": payload.maxChargeDischargePower,
-                "cycleCostPerKwh": payload.cycleCost,
-                "minActionProfitThreshold": payload.minActionProfitThreshold,
-            })
+            live_updates["battery"] = _nn(
+                {
+                    "totalCapacity": payload.totalCapacity,
+                    "minSoc": payload.minSoc,
+                    "maxSoc": payload.maxSoc,
+                    "maxChargePowerKw": payload.maxChargeDischargePower,
+                    "maxDischargePowerKw": payload.maxChargeDischargePower,
+                    "cycleCostPerKwh": payload.cycleCost,
+                    "minActionProfitThreshold": payload.minActionProfitThreshold,
+                }
+            )
         if "home" in sections:
-            live_updates["home"] = _nn({
-                "defaultHourly": payload.consumption,
-                "currency": payload.currency,
-                "consumptionStrategy": payload.consumptionStrategy,
-                "maxFuseCurrent": payload.maxFuseCurrent,
-                "voltage": payload.voltage,
-                "safetyMargin": payload.safetyMarginFactor,
-                "phaseCount": payload.phaseCount,
-                "powerMonitoringEnabled": payload.powerMonitoringEnabled,
-            })
+            live_updates["home"] = _nn(
+                {
+                    "defaultHourly": payload.consumption,
+                    "currency": payload.currency,
+                    "consumptionStrategy": payload.consumptionStrategy,
+                    "maxFuseCurrent": payload.maxFuseCurrent,
+                    "voltage": payload.voltage,
+                    "safetyMargin": payload.safetyMarginFactor,
+                    "phaseCount": payload.phaseCount,
+                    "powerMonitoringEnabled": payload.powerMonitoringEnabled,
+                }
+            )
         if "electricity_price" in sections:
-            live_updates["price"] = _nn({
-                "area": sections["electricity_price"].get("area"),
-                "markupRate": payload.markupRate,
-                "vatMultiplier": payload.vatMultiplier,
-                "additionalCosts": payload.additionalCosts,
-                "taxReduction": payload.taxReduction,
-            })
+            live_updates["price"] = _nn(
+                {
+                    "area": sections["electricity_price"].get("area"),
+                    "markupRate": payload.markupRate,
+                    "vatMultiplier": payload.vatMultiplier,
+                    "additionalCosts": payload.additionalCosts,
+                    "taxReduction": payload.taxReduction,
+                }
+            )
         if live_updates:
             bess_controller.system.update_settings(live_updates)
 
@@ -2613,11 +2662,15 @@ async def setup_complete(payload: APISetupCompletePayload):
                 bess_controller.system.reinitialize_historical_data()
                 logger.info("Historical backfill complete after wizard setup")
             except Exception as backfill_err:
-                logger.warning("Historical backfill failed after setup: %s", backfill_err)
+                logger.warning(
+                    "Historical backfill failed after setup: %s", backfill_err
+                )
             try:
                 now = time_utils.now()
                 current_period = now.hour * 4 + now.minute // 15
-                bess_controller.system.update_battery_schedule(current_period=current_period)
+                bess_controller.system.update_battery_schedule(
+                    current_period=current_period
+                )
                 logger.info("Schedule built with historical data after wizard setup")
             except Exception as sched_err:
                 logger.warning("Could not build schedule after backfill: %s", sched_err)

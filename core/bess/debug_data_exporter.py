@@ -369,7 +369,9 @@ class DebugDataAggregator:
                     if state:
                         snapshot[entity_id] = self._strip_ha_metadata(state)
                 except Exception as e:
-                    logger.warning("Failed to fetch nordpool entity %s: %s", entity_id, e)
+                    logger.warning(
+                        "Failed to fetch nordpool entity %s: %s", entity_id, e
+                    )
 
         elif provider == "octopus":
             octopus_cfg = config["octopus"]
@@ -386,11 +388,16 @@ class DebugDataAggregator:
                         if state:
                             snapshot[entity_id] = self._strip_ha_metadata(state)
                     except Exception as e:
-                        logger.warning("Failed to fetch octopus entity %s: %s", entity_id, e)
+                        logger.warning(
+                            "Failed to fetch octopus entity %s: %s", entity_id, e
+                        )
 
         elif provider != "nordpool_official":
             # nordpool_official uses service calls — no entity state to capture
-            logger.warning("Unknown energy provider '%s' — skipping provider entity snapshot", provider)
+            logger.warning(
+                "Unknown energy provider '%s' — skipping provider entity snapshot",
+                provider,
+            )
 
         logger.info("Entity snapshot captured: %d entities", len(snapshot))
         return snapshot
@@ -405,7 +412,7 @@ class DebugDataAggregator:
             List of TOU segment dicts as held in active_tou_intervals
         """
         try:
-            return list(self.system._schedule_manager.active_tou_intervals)
+            return list(self.system._inverter_controller.active_tou_intervals)
         except Exception as e:
             logger.warning("Failed to serialize inverter TOU segments: %s", e)
             return []

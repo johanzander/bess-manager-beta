@@ -26,6 +26,7 @@ OWNED_SECTIONS = (
     "electricity_price",
     "energy_provider",
     "growatt",
+    "inverter",
     "sensors",
 )
 
@@ -315,6 +316,7 @@ class SettingsStore:
                 "octopus": {},
             },
             "growatt": {"inverter_type": "", "device_id": ""},
+            "inverter": {"platform": "", "device_id": ""},
             "sensors": {},
         }
 
@@ -338,17 +340,26 @@ class SettingsStore:
         battery = self.data.get("battery")
         if isinstance(battery, dict):
             # Rename: max_charge_discharge_power → max_charge_power_kw + max_discharge_power_kw
-            if "max_charge_discharge_power" in battery and "max_charge_power_kw" not in battery:
+            if (
+                "max_charge_discharge_power" in battery
+                and "max_charge_power_kw" not in battery
+            ):
                 power = battery.pop("max_charge_discharge_power")
                 battery["max_charge_power_kw"] = power
                 battery["max_discharge_power_kw"] = power
-                logger.info("Schema migration: renamed max_charge_discharge_power → max_charge_power_kw/max_discharge_power_kw = %s", power)
+                logger.info(
+                    "Schema migration: renamed max_charge_discharge_power → max_charge_power_kw/max_discharge_power_kw = %s",
+                    power,
+                )
                 changed = True
 
             # Rename: cycle_cost → cycle_cost_per_kwh
             if "cycle_cost" in battery and "cycle_cost_per_kwh" not in battery:
                 battery["cycle_cost_per_kwh"] = battery.pop("cycle_cost")
-                logger.info("Schema migration: renamed cycle_cost → cycle_cost_per_kwh = %s", battery["cycle_cost_per_kwh"])
+                logger.info(
+                    "Schema migration: renamed cycle_cost → cycle_cost_per_kwh = %s",
+                    battery["cycle_cost_per_kwh"],
+                )
                 changed = True
 
             # Add missing fields with defaults
@@ -372,13 +383,19 @@ class SettingsStore:
             # Rename: consumption → default_hourly  (matches HomeSettings attribute name)
             if "consumption" in home and "default_hourly" not in home:
                 home["default_hourly"] = home.pop("consumption")
-                logger.info("Schema migration: renamed home.consumption → home.default_hourly = %s", home["default_hourly"])
+                logger.info(
+                    "Schema migration: renamed home.consumption → home.default_hourly = %s",
+                    home["default_hourly"],
+                )
                 changed = True
 
             # Rename: safety_margin_factor → safety_margin  (matches HomeSettings attribute name)
             if "safety_margin_factor" in home and "safety_margin" not in home:
                 home["safety_margin"] = home.pop("safety_margin_factor")
-                logger.info("Schema migration: renamed home.safety_margin_factor → home.safety_margin = %s", home["safety_margin"])
+                logger.info(
+                    "Schema migration: renamed home.safety_margin_factor → home.safety_margin = %s",
+                    home["safety_margin"],
+                )
                 changed = True
 
             if changed:
@@ -399,6 +416,23 @@ class SettingsStore:
                     ep["nordpool"] = nordpool
                     self.data["energy_provider"] = ep
                     changed = True
+
+        growatt = self.data.get("growatt")
+        if isinstance(growatt, dict):
+            old_type = growatt.get("inverter_type", "")
+            inverter = dict(self.data.get("inverter", {}))
+            if old_type and not inverter.get("platform"):
+                platform = "growatt_sph" if old_type == "SPH" else "growatt_min"
+                inverter["platform"] = platform
+                if not inverter.get("device_id") and growatt.get("device_id"):
+                    inverter["device_id"] = growatt["device_id"]
+                self.data["inverter"] = inverter
+                logger.info(
+                    "Schema migration: growatt.inverter_type=%s → inverter.platform=%s",
+                    old_type,
+                    platform,
+                )
+                changed = True
 
         if changed:
             self._write(self.data)

@@ -108,7 +108,7 @@ cd frontend && npm run lint:fix  # Fix TypeScript issues
 - **DP Battery Algorithm**: Dynamic programming optimization engine for cost minimization
 - **HomeAssistantAPIController**: Centralized interface to HA with sensor abstraction
 - **SensorCollector**: Aggregates real-time energy data from HA sensors
-- **GrowattScheduleManager**: Converts optimization results to Growatt inverter commands
+- **InverterController**: Base class for inverter controllers (GrowattMinController, GrowattSphController, SolaxController)
 - **PriceManager**: Handles electricity pricing (Nordpool/Octopus Energy) with markup calculations
 - **HealthCheck**: Comprehensive system and sensor validation
 
