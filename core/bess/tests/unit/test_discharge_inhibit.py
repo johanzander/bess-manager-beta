@@ -32,7 +32,9 @@ def _make_bsm(
 ) -> tuple[BatterySystemManager, InhibitableController]:
     controller = InhibitableController(inhibit_active=inhibit_active)
     bsm = BatterySystemManager(
-        controller=controller, price_source=MockSource([1.0] * 96)
+        controller=controller,
+        price_source=MockSource([1.0] * 96),
+        addon_options={"inverter": {"platform": "growatt_min"}},
     )
     return bsm, controller
 
