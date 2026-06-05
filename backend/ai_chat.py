@@ -176,23 +176,34 @@ Important guidelines:
 - When discussing savings deviations, cite the specific periods and values.
 - If the data is insufficient to answer, say so clearly.
 
-**Analysis — facts, not guesses:**
-- NEVER speculate with "likely", "probably", "suggests", or "may have".
-  Either find the evidence in the data and state what happened, or say you
-  don't have enough data to determine the cause.
-- When analyzing savings changes, follow this process:
-  1. Look at the Prediction Snapshots table.  Identify the exact times where
-     total savings changed significantly (e.g., dropped from 53 to 28 SEK).
-  2. For each significant change, check what happened at that time: Did new
-     prices arrive (check price data, logs)?  Did actual consumption or solar
-     differ from predictions (compare Historical Data vs schedule)?  Did the
-     optimizer extend its horizon to include tomorrow's prices?
-  3. Report what ACTUALLY changed with specific numbers.  For example:
-     "At 13:00 the optimizer re-ran with tomorrow's prices now available.
-     This shifted 15 SEK of planned discharge value to tomorrow because
-     evening prices tomorrow are higher than today."
-- When explaining optimizer decisions, read the relevant source code to give
-  accurate, code-backed answers — don't guess from memory.
+**Analysis — facts only, NEVER guess:**
+- You MUST base every claim on specific data from the tables below or from
+  source code you read with tools.  If you cannot point to a row in a table,
+  a log line, or a line of code that proves your claim, do not make it.
+- NEVER use "likely", "probably", "suggests", "may have", "possibly", or
+  "could have".  State what happened with evidence, or say "I don't have
+  enough data to determine this."
+- NEVER reference internal period indices.  The data tables use times —
+  always refer to times (e.g., "at 13:00", "between 12:45 and 15:45").
+- When analyzing savings changes, follow this exact process:
+  1. Find the exact timestamps in the Prediction Snapshots table where
+     total savings changed significantly.
+  2. For each significant drop, determine the SPECIFIC cause by checking:
+     - Did tomorrow's prices become available?  (Check price data — is
+       tomorrow non-empty?  Check logs for price fetch events.)
+     - Did actual solar or consumption differ from the prediction?
+       (Compare Historical Data rows vs the corresponding Schedule rows
+       for the same time slots.)
+     - Did the optimizer's horizon expand?  (Check if Predicted Count
+       changed in the snapshots.)
+  3. State ONLY what the data shows.  Example of a good answer:
+     "At 13:00, tomorrow's prices became available (the schedule now
+     covers 36 hours instead of 12).  The optimizer moved planned
+     discharge from tonight to tomorrow evening where prices are 0.50 SEK
+     higher.  This shifted 15 SEK of savings from today to tomorrow."
+  4. Example of a BAD answer (never do this):
+     "The optimizer likely received updated data that made it recalculate
+     profitability."  — This says nothing.  What data?  What changed?
 - If the data is insufficient to determine a cause, say so clearly rather
   than inventing a plausible-sounding explanation.
 
@@ -816,9 +827,9 @@ class AIAnalystService:
             )
             if export.historical_periods:
                 rows = [
-                    f"## Historical Data ({period_count} periods)",
-                    "| Per | Time | Intent | Observed | SOE kWh | Solar | Import | Savings |",
-                    "|-----|------|--------|----------|---------|-------|--------|---------|",
+                    f"## Historical Data ({period_count} quarter-hours)",
+                    "| Time | Intent | Observed | SOE kWh | Solar | Import | Savings |",
+                    "|------|--------|----------|---------|-------|--------|---------|",
                 ]
                 for p in export.historical_periods:
                     if p is None:
@@ -828,7 +839,6 @@ class AIAnalystService:
                     en = p.get("energy", {})
                     econ = p.get("economic", {})
                     rows.append(
-                        f"| {p.get('period', ''):>3} "
                         f"| {ts[11:16] if len(ts) >= 16 else ''} "
                         f"| {(dec.get('strategic_intent') or '')[:16]} "
                         f"| {(dec.get('observed_intent') or '')[:16]} "
@@ -848,14 +858,14 @@ class AIAnalystService:
                 period_data = opt_result.get("period_data", [])
 
                 sched_parts = [
-                    f"## Latest Schedule (period {sched.get('optimization_period', '?')})",
+                    "## Latest Schedule",
                     f"```json\n{json.dumps(econ_summary, indent=1, default=str)}\n```",
                 ]
 
                 if period_data:
                     rows = [
-                        "| Per | Time | Intent | BattAct | SOE kWh | BuyPrice | Savings |",
-                        "|-----|------|--------|---------|---------|----------|---------|",
+                        "| Time | Intent | BattAct | SOE kWh | BuyPrice | Savings |",
+                        "|------|--------|---------|---------|----------|---------|",
                     ]
                     for p in period_data:
                         dec = p.get("decision", {})
@@ -863,7 +873,6 @@ class AIAnalystService:
                         econ = p.get("economic", {})
                         ts = str(p.get("timestamp", ""))
                         rows.append(
-                            f"| {p.get('period', ''):>3} "
                             f"| {ts[11:16] if len(ts) >= 16 else ''} "
                             f"| {(dec.get('strategic_intent') or '')[:16]} "
                             f"| {(dec.get('battery_action', 0) or 0):>+.3f} "
@@ -879,13 +888,12 @@ class AIAnalystService:
             if export.snapshots:
                 rows = [
                     f"## Prediction Snapshots ({len(export.snapshots)})",
-                    "| Timestamp | Per | Total Savings | Actual | Predicted |",
-                    "|-----------|-----|---------------|--------|-----------|",
+                    "| Timestamp | Total Savings | Actual Count | Predicted Count |",
+                    "|-----------|---------------|--------------|-----------------|",
                 ]
                 for sn in export.snapshots:
                     rows.append(
                         f"| {str(sn.get('snapshot_timestamp', ''))[:16]} "
-                        f"| {sn.get('optimization_period', '')} "
                         f"| {(sn.get('total_savings', 0) or 0):.4f} "
                         f"| {sn.get('actual_count', 0)} "
                         f"| {sn.get('predicted_count', 0)} |"

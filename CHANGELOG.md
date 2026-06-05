@@ -4,6 +4,12 @@ All notable changes to BESS Battery Manager will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [9.1.0b8] - 2026-06-05
+
+### Fixed
+
+- **AI analyst still using period indices and speculating** — Removed period index columns from all data tables (Historical Data, Schedule, Prediction Snapshots) so the AI only sees times. Added concrete good/bad answer examples to the prompt. Strengthened evidence requirements: every claim must point to a specific table row, log line, or code line.
+
 ## [9.1.0b7] - 2026-06-05
 
 ### Fixed
