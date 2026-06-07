@@ -10,6 +10,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 - **Schedule bar showed "Charging from Grid" during solar charging** — The intent classifier used a near-zero threshold (`grid_to_battery > 0.01`) to distinguish grid charging from solar storage. Any tiny grid supplement (e.g. 0.1 kWh grid vs 0.7 kWh solar) flipped the intent to GRID_CHARGING, which both mislabeled the UI and set the inverter to `grid_charge=True, battery_first` — actively pulling from grid. Fixed by comparing dominant source (`grid_to_battery > solar_to_battery`), matching hardware reality: the Growatt has no "mostly solar, top up from grid" mode.
 
+## [9.1.0b10] - 2026-06-06
+
+### Fixed
+
+- **502 Bad Gateway on startup** — `bess_controller.start()` blocked the uvicorn event loop during initialization (sensor checks, historical data backfill, optimization), showing a 502 error for up to a minute. Moved initialization to a background thread so the web server binds immediately. The dashboard now shows a live progress spinner during startup.
+- **InfluxDB warnings on startup when not configured** — Fresh installs with default placeholder credentials (`your_db_username_here`) triggered warnings in the health check and a cascade of per-period errors during historical data backfill. InfluxDB is optional, so unconfigured state is now detected early, logged at INFO level, and the backfill is skipped entirely.
+- **Deploy script fails on beta version strings** — `deploy.sh` used bash arithmetic on version strings like `0b9`, which bash misinterprets as octal. Fixed version parsing to handle beta suffixes. Also added CHANGELOG.md to the add-on build output so HA shows the changelog in the add-on UI.
+
 ## [9.1.0b9] - 2026-06-06
 
 ### Fixed
