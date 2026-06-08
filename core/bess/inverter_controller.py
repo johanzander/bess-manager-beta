@@ -140,7 +140,9 @@ class InverterController(ABC):
         else:
             raise ValueError(f"Unknown strategic intent: {intent}")
 
-    def apply_period(self, controller, grid_charge: bool, discharge_rate: int) -> bool:
+    def apply_period(
+        self, controller, grid_charge: bool, discharge_rate: int
+    ) -> tuple[bool, str]:
         """Write period control settings to hardware.
 
         The caller (BatterySystemManager) is responsible for applying the
@@ -152,7 +154,7 @@ class InverterController(ABC):
             discharge_rate: Discharge power rate (0-100%), post-inhibit
 
         Returns:
-            True if all hardware writes succeeded, False if any failed.
+            Tuple of (success, error_message). error_message is empty on success.
         """
         return self._write_period_to_hardware(controller, grid_charge, discharge_rate)
 
@@ -362,7 +364,7 @@ class InverterController(ABC):
 
     def _write_period_to_hardware(
         self, controller, grid_charge: bool, discharge_rate: int
-    ) -> bool:
+    ) -> tuple[bool, str]:
         """Write per-period control settings to hardware.
 
         Default implementation uses Growatt register interface (grid_charge +
@@ -374,15 +376,15 @@ class InverterController(ABC):
             discharge_rate: Discharge power rate (0-100%)
 
         Returns:
-            True if all hardware writes succeeded, False if any failed.
+            Tuple of (success, error_message). error_message is empty on success.
         """
-        success = True
+        errors = []
 
         try:
             controller.set_grid_charge(grid_charge)
         except Exception as e:
             logger.error("FAILED: set_grid_charge(%s): %s", grid_charge, e)
-            success = False
+            errors.append(str(e))
 
         try:
             controller.set_discharging_power_rate(discharge_rate)
@@ -390,9 +392,11 @@ class InverterController(ABC):
             logger.error(
                 "FAILED: set_discharging_power_rate(%s): %s", discharge_rate, e
             )
-            success = False
+            errors.append(str(e))
 
-        return success
+        if errors:
+            return False, "; ".join(errors)
+        return True, ""
 
     @abstractmethod
     def get_all_tou_segments(self) -> list[dict]:

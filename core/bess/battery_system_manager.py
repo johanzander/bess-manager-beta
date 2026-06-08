@@ -2278,68 +2278,106 @@ class BatterySystemManager:
             period,
         )
 
-        # Delegate hardware write to the inverter controller
-        success = self._inverter_controller.apply_period(
+        # Delegate hardware write to the inverter controller.
+        # This is complementary to _hardware_write_pending (which retries the
+        # full TOU schedule on the next hourly cycle).  This retry targets the
+        # per-period write at finer granularity within the 15-min window.
+        success, error_msg = self._inverter_controller.apply_period(
             self.controller, grid_charge, discharge_rate
         )
 
         if not success:
-            period_time = f"{period // 4:02d}:{(period % 4) * 15:02d}"
+            pt = format_period(period)
             self._runtime_failure_tracker.dismiss_by_category("period_apply")
             self._runtime_failure_tracker.record_failure(
                 category="period_apply",
                 operation=(
-                    f"Period {period} ({period_time}): Could not apply "
-                    f"optimization to inverter, retrying in 5 min"
+                    f"Period {period} ({pt}): Could not apply "
+                    f"optimization to inverter, retrying in 3 min"
                 ),
-                error=Exception("Inverter communication failure"),
+                error=Exception(error_msg),
             )
             self._schedule_period_retry(period, grid_charge, discharge_rate)
+        else:
+            self._last_applied_discharge_rate = discharge_rate
 
         # Apply charging power rate (BSM-level concern: uses power monitor)
         self.adjust_charging_power()
 
-        self._last_applied_discharge_rate = discharge_rate
+    _PERIOD_RETRY_DELAYS_MIN: ClassVar[list[int]] = [
+        3,
+        8,
+    ]  # retry at +3 min and +8 min within a 15-min period
 
     def _schedule_period_retry(
-        self, period: int, grid_charge: bool, discharge_rate: int
+        self,
+        period: int,
+        grid_charge: bool,
+        discharge_rate: int,
+        attempt: int = 1,
     ) -> None:
-        """Schedule a one-shot retry of period hardware write after 5 minutes.
+        """Schedule a one-shot retry of period hardware write.
 
+        Retries twice within the 15-min period window (at +3 min and +8 min).
         If the scheduler is not available (e.g. during tests), the retry is
         skipped and the failure banner remains as-is.
         """
+        max_attempts = len(self._PERIOD_RETRY_DELAYS_MIN)
+        if attempt > max_attempts:
+            return
+
         if not self._scheduler:
             logger.warning("Cannot schedule period retry — no scheduler available")
             return
 
         from apscheduler.triggers.date import DateTrigger
 
-        retry_time = time_utils.now() + timedelta(minutes=5)
-        period_time = f"{period // 4:02d}:{(period % 4) * 15:02d}"
+        delay_min = self._PERIOD_RETRY_DELAYS_MIN[attempt - 1]
+        retry_time = time_utils.now() + timedelta(minutes=delay_min)
+        pt = format_period(period)
 
         def retry_period_write():
-            logger.info("Retrying period %d (%s) hardware write", period, period_time)
-            success = self._inverter_controller.apply_period(
+            logger.info(
+                "Retrying period %d (%s) hardware write (attempt %d/%d)",
+                period,
+                pt,
+                attempt + 1,
+                max_attempts + 1,
+            )
+            success, error_msg = self._inverter_controller.apply_period(
                 self.controller, grid_charge, discharge_rate
             )
-            # Replace the "retrying" banner with the outcome
             self._runtime_failure_tracker.dismiss_by_category("period_apply")
             if not success:
-                self._runtime_failure_tracker.record_failure(
-                    category="period_apply",
-                    operation=(
-                        f"Period {period} ({period_time}): Failed to apply "
-                        f"optimization after 2 attempts"
-                    ),
-                    error=Exception("Inverter communication failure"),
-                )
+                if attempt < max_attempts:
+                    self._runtime_failure_tracker.record_failure(
+                        category="period_apply",
+                        operation=(
+                            f"Period {period} ({pt}): Retry {attempt} failed, "
+                            f"retrying in {self._PERIOD_RETRY_DELAYS_MIN[attempt] - delay_min} min"
+                        ),
+                        error=Exception(error_msg),
+                    )
+                    self._schedule_period_retry(
+                        period, grid_charge, discharge_rate, attempt + 1
+                    )
+                else:
+                    self._runtime_failure_tracker.record_failure(
+                        category="period_apply",
+                        operation=(
+                            f"Period {period} ({pt}): Failed to apply "
+                            f"optimization after {max_attempts + 1} attempts"
+                        ),
+                        error=Exception(error_msg),
+                    )
             else:
                 logger.info(
-                    "Period %d (%s) hardware write succeeded on retry",
+                    "Period %d (%s) hardware write succeeded on retry %d",
                     period,
-                    period_time,
+                    pt,
+                    attempt,
                 )
+                self._last_applied_discharge_rate = discharge_rate
 
         self._scheduler.add_job(
             retry_period_write,
@@ -2347,9 +2385,10 @@ class BatterySystemManager:
             misfire_grace_time=60,
         )
         logger.info(
-            "Scheduled period %d (%s) retry at %s",
+            "Scheduled period %d (%s) retry %d at %s",
             period,
-            period_time,
+            pt,
+            attempt,
             retry_time.strftime("%H:%M:%S"),
         )
 
