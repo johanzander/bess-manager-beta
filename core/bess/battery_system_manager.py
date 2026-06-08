@@ -157,6 +157,9 @@ class BatterySystemManager:
         # Hardware write retry: when a write fails, force re-apply next cycle
         self._hardware_write_pending = False
 
+        # Scheduler reference for one-shot retry jobs (set via set_scheduler)
+        self._scheduler = None
+
         self._runtime_failure_tracker = RuntimeFailureTracker()
 
         # Inject failure tracker into controller if available
@@ -164,6 +167,10 @@ class BatterySystemManager:
             self._controller.failure_tracker = self._runtime_failure_tracker
 
         logger.debug("BatterySystemManager initialized")
+
+    def set_scheduler(self, scheduler):
+        """Set the APScheduler instance for one-shot retry jobs."""
+        self._scheduler = scheduler
 
     @property
     def is_configured(self) -> bool:
@@ -2272,14 +2279,79 @@ class BatterySystemManager:
         )
 
         # Delegate hardware write to the inverter controller
-        self._inverter_controller.apply_period(
+        success = self._inverter_controller.apply_period(
             self.controller, grid_charge, discharge_rate
         )
+
+        if not success:
+            period_time = f"{period // 4:02d}:{(period % 4) * 15:02d}"
+            self._runtime_failure_tracker.dismiss_by_category("period_apply")
+            self._runtime_failure_tracker.record_failure(
+                category="period_apply",
+                operation=(
+                    f"Period {period} ({period_time}): Could not apply "
+                    f"optimization to inverter, retrying in 5 min"
+                ),
+                error=Exception("Inverter communication failure"),
+            )
+            self._schedule_period_retry(period, grid_charge, discharge_rate)
 
         # Apply charging power rate (BSM-level concern: uses power monitor)
         self.adjust_charging_power()
 
         self._last_applied_discharge_rate = discharge_rate
+
+    def _schedule_period_retry(
+        self, period: int, grid_charge: bool, discharge_rate: int
+    ) -> None:
+        """Schedule a one-shot retry of period hardware write after 5 minutes.
+
+        If the scheduler is not available (e.g. during tests), the retry is
+        skipped and the failure banner remains as-is.
+        """
+        if not self._scheduler:
+            logger.warning("Cannot schedule period retry — no scheduler available")
+            return
+
+        from apscheduler.triggers.date import DateTrigger
+
+        retry_time = time_utils.now() + timedelta(minutes=5)
+        period_time = f"{period // 4:02d}:{(period % 4) * 15:02d}"
+
+        def retry_period_write():
+            logger.info("Retrying period %d (%s) hardware write", period, period_time)
+            success = self._inverter_controller.apply_period(
+                self.controller, grid_charge, discharge_rate
+            )
+            # Replace the "retrying" banner with the outcome
+            self._runtime_failure_tracker.dismiss_by_category("period_apply")
+            if not success:
+                self._runtime_failure_tracker.record_failure(
+                    category="period_apply",
+                    operation=(
+                        f"Period {period} ({period_time}): Failed to apply "
+                        f"optimization after 2 attempts"
+                    ),
+                    error=Exception("Inverter communication failure"),
+                )
+            else:
+                logger.info(
+                    "Period %d (%s) hardware write succeeded on retry",
+                    period,
+                    period_time,
+                )
+
+        self._scheduler.add_job(
+            retry_period_write,
+            DateTrigger(run_date=retry_time),
+            misfire_grace_time=60,
+        )
+        logger.info(
+            "Scheduled period %d (%s) retry at %s",
+            period,
+            period_time,
+            retry_time.strftime("%H:%M:%S"),
+        )
 
     def _calculate_initial_cost_basis(self, current_period: int) -> float:
         """Calculate marginal cost of battery energy using historical data.

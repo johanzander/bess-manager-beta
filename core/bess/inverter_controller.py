@@ -140,7 +140,7 @@ class InverterController(ABC):
         else:
             raise ValueError(f"Unknown strategic intent: {intent}")
 
-    def apply_period(self, controller, grid_charge: bool, discharge_rate: int) -> None:
+    def apply_period(self, controller, grid_charge: bool, discharge_rate: int) -> bool:
         """Write period control settings to hardware.
 
         The caller (BatterySystemManager) is responsible for applying the
@@ -150,8 +150,11 @@ class InverterController(ABC):
             controller: HomeAssistantAPIController instance
             grid_charge: Whether to enable grid charging
             discharge_rate: Discharge power rate (0-100%), post-inhibit
+
+        Returns:
+            True if all hardware writes succeeded, False if any failed.
         """
-        self._write_period_to_hardware(controller, grid_charge, discharge_rate)
+        return self._write_period_to_hardware(controller, grid_charge, discharge_rate)
 
     def get_period_settings(self, period: int) -> dict:
         """Get control settings for a specific 15-minute period.
@@ -359,7 +362,7 @@ class InverterController(ABC):
 
     def _write_period_to_hardware(
         self, controller, grid_charge: bool, discharge_rate: int
-    ) -> None:
+    ) -> bool:
         """Write per-period control settings to hardware.
 
         Default implementation uses Growatt register interface (grid_charge +
@@ -369,12 +372,17 @@ class InverterController(ABC):
             controller: HomeAssistantAPIController instance
             grid_charge: Whether to enable grid charging
             discharge_rate: Discharge power rate (0-100%)
+
+        Returns:
+            True if all hardware writes succeeded, False if any failed.
         """
+        success = True
+
         try:
             controller.set_grid_charge(grid_charge)
         except Exception as e:
             logger.error("FAILED: set_grid_charge(%s): %s", grid_charge, e)
-            # Failure already recorded by _api_request via record_failure_once
+            success = False
 
         try:
             controller.set_discharging_power_rate(discharge_rate)
@@ -382,7 +390,9 @@ class InverterController(ABC):
             logger.error(
                 "FAILED: set_discharging_power_rate(%s): %s", discharge_rate, e
             )
-            # Failure already recorded by _api_request via record_failure_once
+            success = False
+
+        return success
 
     @abstractmethod
     def get_all_tou_segments(self) -> list[dict]:
