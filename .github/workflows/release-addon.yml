@@ -62,7 +62,7 @@ jobs:
             BUILD_DATE=${{ github.event.release.published_at }}
             BUILD_REF=${{ github.sha }}
           tags: |
-            ${{ env.REGISTRY }}/johanzander/bess-manager-${{ matrix.arch }}:${{ steps.version.outputs.version }}
-            ${{ env.REGISTRY }}/johanzander/bess-manager-${{ matrix.arch }}:latest
+            ${{ env.REGISTRY }}/${{ github.repository }}-${{ matrix.arch }}:${{ steps.version.outputs.version }}
+            ${{ env.REGISTRY }}/${{ github.repository }}-${{ matrix.arch }}:latest
           cache-from: type=gha,scope=${{ matrix.arch }}
           cache-to: type=gha,mode=max,scope=${{ matrix.arch }}

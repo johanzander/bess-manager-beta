@@ -6,9 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
+## [9.6.2b1] - 2026-06-21
+
 ### Added
 
-- **ENTSO-e / Belpex price provider** — New `entsoe` energy provider reads day-ahead spot prices from the [ENTSO-e Transparency Platform](https://github.com/JaccoR/hass-entso-e) HA integration via the average-price sensor's `prices_today` / `prices_tomorrow` attributes. Supports both hourly (PT60M) and quarterly (PT15M) data, auto-detected by the setup wizard. Prices are treated as VAT-exclusive spot prices. Experimental — not yet real-world validated. (#126)
+- **ENTSO-e / Belpex price provider** (experimental) — New `entsoe` energy provider reads day-ahead spot prices from the [ENTSO-e Transparency Platform](https://github.com/JaccoR/hass-entso-e) HA integration. Auto-detected by the setup wizard. (#126)
+- **Generalized pricing formula** — New `spot_multiplier` and `export_spot_multiplier` fields support Belgian-style dynamic contracts where the supplier applies a multiplicative factor to the spot price. Formula: `buy = (spot × multiplier + markup) × VAT + costs`, `sell = spot × export_multiplier + compensation`. Defaults to 1.0 (no change for existing Nordic users). (#126)
+- **Provider-specific pricing defaults** — Switching provider in the wizard/settings now pre-fills appropriate defaults (e.g. ENTSO-e → VAT 1.06 for Belgium, Nordpool → VAT 1.25 for Sweden). (#126)
+- **Backend-driven currency detection** — Currency is now auto-detected from the provider in the backend (ENTSO-e → EUR, Octopus → GBP), not hardcoded in the frontend. (#126)
+- **Real-world regression scenario** — Frank's ENTSO-e/Belpex + Growatt MOD (SolaX Modbus GEN4) config locked into both backend discovery tests and frontend wizard E2E. (#126)
 
 ## [9.6.1] - 2026-06-21
 
