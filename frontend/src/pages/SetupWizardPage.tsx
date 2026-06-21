@@ -54,7 +54,7 @@ const SetupWizardPage: React.FC = () => {
 
   const [homeForm, setHomeForm] = useState<HomeForm>({
     consumption: 3.5,
-    consumptionStrategy: 'sensor',
+    consumptionStrategy: 'ha_statistics',
     maxFuseCurrent: 25,
     voltage: 230,
     safetyMarginFactor: 1.0,

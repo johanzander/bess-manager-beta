@@ -41,7 +41,7 @@ const EMPTY_BATTERY: BatteryForm = {
   temperatureDeratingEnabled: false, minActionProfit: 0,
 };
 const EMPTY_HOME: HomeForm = {
-  consumption: 3.5, consumptionStrategy: 'sensor',
+  consumption: 3.5, consumptionStrategy: 'ha_statistics',
   maxFuseCurrent: 25, voltage: 230, safetyMarginFactor: 1.0,
   phaseCount: 3, powerMonitoringEnabled: true,
 };
