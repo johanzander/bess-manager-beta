@@ -29,6 +29,7 @@ OWNED_SECTIONS = (
     "inverter",
     "sensors",
     "ai_analyst",
+    "demo_mode",
 )
 
 # All valid inverter platform IDs.
@@ -413,6 +414,7 @@ class SettingsStore:
                 "solax_modbus_native": {},
                 "shared": {},
             },
+            "demo_mode": {"enabled": False},
         }
 
     def _migrate_schema(self) -> None:
@@ -565,6 +567,11 @@ class SettingsStore:
                     len(shared),
                 )
                 changed = True
+
+        # --- demo_mode section (added v9.5) ---
+        if "demo_mode" not in self.data:
+            self.data["demo_mode"] = {"enabled": False}
+            changed = True
 
         if changed:
             self._write(self.data)

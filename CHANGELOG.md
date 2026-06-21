@@ -10,6 +10,72 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 - **ENTSO-e / Belpex price provider** — New `entsoe` energy provider reads day-ahead spot prices from the [ENTSO-e Transparency Platform](https://github.com/JaccoR/hass-entso-e) HA integration via the average-price sensor's `prices_today` / `prices_tomorrow` attributes. Supports both hourly (PT60M) and quarterly (PT15M) data, auto-detected by the setup wizard. Prices are treated as VAT-exclusive spot prices. Experimental — not yet real-world validated. (#126)
 
+## [9.6.1] - 2026-06-21
+
+### Fixed
+
+- **LOAD_SUPPORT discharged at full rate instead of the planned pace** — The DP optimizer models partial discharge for LOAD_SUPPORT (e.g. discharge 0.4 kW and let the grid cover the rest, reserving the battery for a later expensive peak), but the inverter control layer always wrote `discharge_rate=100%`, so the battery dumped at full power and drained early. LOAD_SUPPORT now scales the inverter discharge rate from the planned battery action, mirroring EXPORT_ARBITRAGE. (Issue #147)
+- **Consumption strategy change silently dropped in setup wizard** — `POST /api/setup/complete` only entered the home settings block when `currency` or `consumption` were non-null; changing `consumptionStrategy`, `maxFuseCurrent`, `voltage`, or other home-only fields without also touching those two fields caused the change to be silently lost. Same flaw applied to the battery block (guarded by `totalCapacity` only) and electricity-price block. All three blocks now use an `any(f is not None …)` guard covering every field in the section.
+- **Consumption strategy change takes effect immediately** — Updating `consumption_strategy` via `update_settings()` now clears the stale prediction cache so the next optimization cycle fetches predictions under the new strategy, rather than waiting until the nightly `prepare_next_day` refresh at 23:55.
+- **Next-day schedule used today's solar forecast** — The `prepare_next_day` optimization built tomorrow's battery schedule from *today's* Solcast forecast instead of tomorrow's, so the plan written to the inverter could be optimized against substantially wrong solar production (e.g. 28.5 kWh today vs 64.8 kWh forecast for the next day). It now uses `get_solar_forecast_tomorrow()`, mirroring the extended-horizon path, with the same zeros fallback when tomorrow's forecast is unavailable.
+- **Next-day schedule ignored the real battery SOC** — The `prepare_next_day` run (cron at 23:55, when current SOC is known and ≈ tomorrow's starting SOC) discarded the actual SOC and assumed minimum SOC. On any night the battery wasn't actually empty, tomorrow's plan started from a wrong state and under-used stored energy. It now seeds the next-day plan from the real current SOC, matching the regular optimization path.
+
+## [9.6.0] - 2026-06-20
+
+### Fixed
+
+- **Solar-export savings over-crediting** — On sunny days the optimizer booked revenue for exporting surplus solar that the inverter actually stores in the battery (a `load_first` "store" period stores *all* surplus), inflating reported savings by roughly 8–16%. Surplus handling is now modelled as a binary per-period choice — store all surplus (no phantom export) or export all surplus — and export is credited per disposition, so reported savings match what the hardware can actually deliver. Verified end-to-end by a new closed-loop plan-faithfulness simulator that confirms planned and realized economics agree to the öre. This also removes the morning charge/export "dithering" some users observed.
+- **Production-safety hardening** — Guard against a `ZeroDivisionError` when battery `total_capacity` is 0; replace `assert`-based validation of production data with explicit `SystemConfigurationError` (so the checks survive Python's `-O` optimization flag); and harden inverter TOU time-range parsing against malformed values.
+### Changed
+
+- **Battery surplus handling is now a binary store/export decision per period** — Schedules may differ from previous versions: instead of partial solar-to-battery splits, each period either stores all surplus solar or exports all of it. This is forecast-robust by construction — bonus solar beyond the forecast is always captured or exported, never wasted.
+
+### Improved
+
+- **Installation guide — consumption forecast (Step 3)** — Reworked into a comparison of all four consumption strategies with a clear recommendation to use `ha_statistics` (most accurate, no manual sensor setup), including the Home Assistant Energy-dashboard requirement and the ~7-day warm-up behaviour.
+
+## [9.5.0] - 2026-06-15
+
+### Added
+
+- **Demo Mode** — New users can observe how BESS Manager would optimize their battery without actually controlling the inverter. The setup wizard now offers a "Demo Mode" vs "Live Control" choice as the final step. While in demo mode, the optimizer runs normally but all inverter writes are blocked; savings are labeled as theoretical estimates. A persistent banner shows the current mode with a "Go Live" button that triggers a pre-flight health check before enabling live control. Demo mode is also available as a toggle in the new **System** tab on the Settings page.
+- **Settings page consolidation** — The Settings page now has five tabs: Integrations, Electricity Pricing, Battery, Home, and System. The old Health tab has been replaced by System, which combines demo mode toggle, AI analyst settings, and diagnostics (health checks + debug export).
+
+### Fixed
+
+- **Dockerfile and package script now auto-include new backend modules** — Previously each Python file had to be listed by name in both `Dockerfile` and `package-addon.sh`; new files (like `ai_chat.py`) were silently excluded from builds, causing `ModuleNotFoundError` at runtime. Both now use a `*.py` glob.
+- **Removed legacy `config.dev.yaml`** — `bess_manager/config.yaml` is the single source of truth for version and add-on metadata.
+
+### Improved
+
+- **Installation instructions** — Expanded Step 1 in README and Installation Guide with explicit navigation steps for first-time Home Assistant users.
+
+## [9.4.3] - 2026-06-15
+
+### Fixed
+
+- **Single changelog source of truth** — `bess_manager/CHANGELOG.md` is now a symlink to the repository-root `CHANGELOG.md` instead of a hand-maintained copy. The duplicate had drifted (it stopped at 9.4.0), so the Home Assistant add-on Changelog tab was showing outdated release notes; it now always reflects the canonical changelog.
+
+## [9.4.2] - 2026-06-15
+
+### Fixed
+
+- **Removed duplicate "Runtime Errors" alert for unavailable InfluxDB history** — When InfluxDB historical data is missing, the dedicated "Incomplete Historical Data" dashboard banner already informs the user. v9.4.1 additionally recorded the same condition in the runtime-failure tracker, so it also appeared in the "Runtime Errors" panel — alarming, since that panel is meant for unexpected, actionable failures and the condition is benign (optimization continues normally). The redundant runtime-error alert is no longer raised; the friendly banner remains the single source of truth.
+
+## [9.4.1] - 2026-06-14
+
+### Fixed
+
+- **Optimization no longer freezes when InfluxDB history is unavailable** — Historical reconstruction from InfluxDB is an optional enhancement (it backfills the actuals/savings view) and is never required to run the optimization, which uses live battery SOC plus the configured forecast. Previously a broken InfluxDB connection (e.g. after a Home Assistant update) raised a fatal error that aborted every re-optimization, silently freezing the battery on the midnight forecast for the whole day. The missing-history condition is now surfaced as a runtime failure banner and the hourly optimization continues. Note: the `influxdb_7d_avg` consumption strategy still genuinely requires InfluxDB.
+
+## [9.4.0] - 2026-06-12
+
+### Fixed
+
+- **SPH platform capability gating** — UI and backend now disable features unsupported by SPH inverters (grid charge toggle, discharge power rate, fuse protection). Prevents "No entity ID configured for Grid Charge Enabled" errors. (#60)
+- **SPH sensor definitions and device discovery** — Fixed sensor key mappings and discovery logic for SPH inverters. UI no longer incorrectly shows "solax" for SPH configurations. (#60)
+- **Dead lifetime sensors removed** — Removed non-existent lifetime sensor keys from all platform UI definitions.
+
 ## [9.3.0] - 2026-06-12
 
 ### Changed

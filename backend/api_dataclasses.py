@@ -1004,6 +1004,8 @@ class APISetupCompletePayload(BaseModel):
     entsoeEntity: str | None = None
     # Inverter
     inverterPlatform: str | None = None
+    # Control mode
+    demoMode: bool | None = None
 
     @field_validator("sensors")
     @classmethod
