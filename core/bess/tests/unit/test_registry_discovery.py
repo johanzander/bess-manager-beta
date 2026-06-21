@@ -1416,4 +1416,3 @@ def _entsoe_registry() -> list[dict]:
             "entsoe.Belpex H_max_price",
         ),
     ]
-
