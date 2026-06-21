@@ -360,11 +360,13 @@ class SettingsStore:
             BATTERY_STORAGE_SIZE_KWH,
             DEFAULT_AREA,
             DEFAULT_CURRENCY,
+            EXPORT_SPOT_MULTIPLIER,
             HOME_HOURLY_CONSUMPTION_KWH,
             HOUSE_MAX_FUSE_CURRENT_A,
             HOUSE_VOLTAGE_V,
             MARKUP_RATE,
             SAFETY_MARGIN_FACTOR,
+            SPOT_MULTIPLIER,
             TAX_REDUCTION,
             VAT_MULTIPLIER,
         )
@@ -394,6 +396,8 @@ class SettingsStore:
                 "vat_multiplier": VAT_MULTIPLIER,
                 "additional_costs": ADDITIONAL_COSTS,
                 "tax_reduction": TAX_REDUCTION,
+                "spot_multiplier": SPOT_MULTIPLIER,
+                "export_spot_multiplier": EXPORT_SPOT_MULTIPLIER,
                 "area": DEFAULT_AREA,
             },
             "energy_provider": {
@@ -567,6 +571,24 @@ class SettingsStore:
                     len(shared),
                 )
                 changed = True
+
+        # --- electricity_price: add spot multiplier fields ---
+        elec = self.data.get("electricity_price")
+        if isinstance(elec, dict):
+            for key, default in (
+                ("spot_multiplier", 1.0),
+                ("export_spot_multiplier", 1.0),
+            ):
+                if key not in elec:
+                    elec[key] = default
+                    logger.info(
+                        "Schema migration: added electricity_price.%s = %s",
+                        key,
+                        default,
+                    )
+                    changed = True
+            if changed:
+                self.data["electricity_price"] = elec
 
         # --- demo_mode section (added v9.5) ---
         if "demo_mode" not in self.data:

@@ -276,6 +276,15 @@ async def patch_settings(updates: dict):
                 bess_controller.system.update_settings({"price": section})
 
             elif store_key == "energy_provider":
+                # Auto-set currency when provider implies a specific one
+                _PROVIDER_CURRENCY = {"octopus": "GBP", "entsoe": "EUR"}
+                auto_currency = _PROVIDER_CURRENCY.get(section.get("provider", ""))
+                if auto_currency:
+                    home_sec = bess_controller.settings_store.get_section("home")
+                    if home_sec.get("currency") != auto_currency:
+                        home_sec["currency"] = auto_currency
+                        bess_controller.settings_store.save_section("home", home_sec)
+                        bess_controller.system.update_settings({"home": home_sec})
                 # Apply the new provider live so a restart is not required when
                 # switching between nordpool, nordpool_official, and octopus.
                 bess_controller.system.update_settings({"energy_provider": section})
@@ -2998,6 +3007,8 @@ async def setup_complete(payload: APISetupCompletePayload):
             "vatMultiplier": "vat_multiplier",
             "additionalCosts": "additional_costs",
             "taxReduction": "tax_reduction",
+            "spotMultiplier": "spot_multiplier",
+            "exportSpotMultiplier": "export_spot_multiplier",
         }
         area = payload.area or payload.nordpoolArea
         if any(getattr(payload, f) is not None for f in _PRICE_MAP) or area:
@@ -3032,6 +3043,16 @@ async def setup_complete(payload: APISetupCompletePayload):
             if payload.provider == "entsoe" and payload.entsoeEntity:
                 ep["entsoe"] = {"entity": payload.entsoeEntity}
             sections["energy_provider"] = ep
+
+            # Auto-set currency from provider when not explicitly provided
+            _PROVIDER_CURRENCY = {"octopus": "GBP", "entsoe": "EUR"}
+            auto_currency = _PROVIDER_CURRENCY.get(payload.provider or "")
+            if auto_currency and payload.currency is None:
+                home = sections.get(
+                    "home"
+                ) or bess_controller.settings_store.get_section("home")
+                home["currency"] = auto_currency
+                sections["home"] = home
 
         # --- inverter ---
         if payload.inverterPlatform is not None:
