@@ -112,6 +112,7 @@ const SetupWizardPage: React.FC = () => {
       const autoArea = hasOfficialNordpool ? d.nordpoolArea : d.nordpoolCustomArea;
       setPricingForm(f => ({
         ...f,
+        ...(d.pricingDefaults ?? {}),
         ...(autoProvider ? { provider: autoProvider } : {}),
         ...(d.currency ? { currency: d.currency } : {}),
         ...(autoArea ? { area: autoArea } : {}),

@@ -2747,6 +2747,55 @@ async def get_setup_status():
     )
 
 
+_PROVIDER_PRICING_DEFAULTS: dict[str, dict] = {
+    "nordpool_official": {
+        "markupRate": 0.08,
+        "vatMultiplier": 1.25,
+        "additionalCosts": 0.773,
+        "taxReduction": 0.20,
+        "spotMultiplier": 1.0,
+        "exportSpotMultiplier": 1.0,
+    },
+    "nordpool_hacs": {
+        "markupRate": 0.08,
+        "vatMultiplier": 1.25,
+        "additionalCosts": 0.773,
+        "taxReduction": 0.20,
+        "spotMultiplier": 1.0,
+        "exportSpotMultiplier": 1.0,
+    },
+    "entsoe": {
+        "markupRate": 0.0,
+        "vatMultiplier": 1.06,
+        "additionalCosts": 0.0,
+        "taxReduction": 0.0,
+        "spotMultiplier": 1.0,
+        "exportSpotMultiplier": 1.0,
+    },
+    "octopus": {
+        "markupRate": 0.0,
+        "vatMultiplier": 1.0,
+        "additionalCosts": 0.0,
+        "taxReduction": 0.0,
+        "spotMultiplier": 1.0,
+        "exportSpotMultiplier": 1.0,
+    },
+}
+
+
+def _pricing_defaults_for_discovery(integrations: dict) -> dict:
+    """Return pricing defaults matching the auto-detected provider."""
+    if integrations.get("octopus_found") and not integrations.get("nordpool_found"):
+        return _PROVIDER_PRICING_DEFAULTS["octopus"]
+    if integrations.get("entsoe_found") and not integrations.get("nordpool_found"):
+        return _PROVIDER_PRICING_DEFAULTS["entsoe"]
+    if integrations.get("nordpool_config_entry_id"):
+        return _PROVIDER_PRICING_DEFAULTS["nordpool_official"]
+    if integrations.get("nordpool_custom_area"):
+        return _PROVIDER_PRICING_DEFAULTS["nordpool_hacs"]
+    return _PROVIDER_PRICING_DEFAULTS["nordpool_official"]
+
+
 @router.post("/api/setup/discover")
 async def run_setup_discovery():
     """Run auto-discovery of inverter and pricing integrations.
@@ -2908,6 +2957,7 @@ async def run_setup_discovery():
                 "detected_phase_count": detected_phase_count,
                 "currency": integrations["currency"],
                 "vat_multiplier": integrations["vat_multiplier"],
+                "pricingDefaults": _pricing_defaults_for_discovery(integrations),
             }
         )
         # Attach sensor dicts without key conversion
