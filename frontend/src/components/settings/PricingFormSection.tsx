@@ -35,8 +35,8 @@ const PROVIDER_DEFAULTS: Record<string, Partial<PricingForm>> = {
     taxReduction: 0.20, spotMultiplier: 1.0, exportSpotMultiplier: 1.0,
   },
   entsoe: {
-    markupRate: 0.0, vatMultiplier: 1.06, additionalCosts: 0.0,
-    taxReduction: 0.0, spotMultiplier: 1.0, exportSpotMultiplier: 1.0,
+    markupRate: 0.198, vatMultiplier: 1.06, additionalCosts: 0.0,
+    taxReduction: -0.012685, spotMultiplier: 1.0175, exportSpotMultiplier: 1.018,
   },
   octopus: {
     markupRate: 0.0, vatMultiplier: 1.0, additionalCosts: 0.0,
