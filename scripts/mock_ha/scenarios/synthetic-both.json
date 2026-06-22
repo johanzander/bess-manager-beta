@@ -666,16 +666,6 @@
       "unique_id": "sensor_nordpool_kwh_se4_sek_2_10_025"
     },
     {
-      "entity_id": "sensor.solcast_pv_forecast_forecast_today",
-      "platform": "solcast_solar",
-      "unique_id": "sensor_solcast_pv_forecast_forecast_today"
-    },
-    {
-      "entity_id": "sensor.solcast_pv_forecast_forecast_tomorrow",
-      "platform": "solcast_solar",
-      "unique_id": "sensor_solcast_pv_forecast_forecast_tomorrow"
-    },
-    {
       "entity_id": "sensor.current_l1",
       "platform": "homeassistant",
       "unique_id": "sensor_current_l1"
@@ -799,6 +789,22 @@
       "entity_id": "select.solax_charger_use_mode",
       "platform": "solax_modbus",
       "unique_id": "select_solax_charger_use_mode"
+    },
+    {
+      "entity_id": "sensor.solcast_pv_forecast_forecast_today",
+      "unique_id": "total_kwh_forecast_today",
+      "platform": "solcast_solar",
+      "original_name": "Forecast Today",
+      "disabled_by": null,
+      "hidden_by": null
+    },
+    {
+      "entity_id": "sensor.solcast_pv_forecast_forecast_tomorrow",
+      "unique_id": "total_kwh_forecast_tomorrow",
+      "platform": "solcast_solar",
+      "original_name": "Forecast Tomorrow",
+      "disabled_by": null,
+      "hidden_by": null
     }
   ],
   "config_entries": [

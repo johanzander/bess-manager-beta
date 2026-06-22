@@ -650,6 +650,11 @@ class HomeAssistantAPIController:
         "charger_use_mode": "solax_charger_use_mode",
     }
 
+    SOLCAST_SUFFIX_MAP: ClassVar[dict[str, str]] = {
+        "total_kwh_forecast_today": "solar_forecast_today",
+        "total_kwh_forecast_tomorrow": "solar_forecast_tomorrow",
+    }
+
     def resolve_sensor_for_influxdb(self, sensor_key: str) -> str | None:
         """Resolve sensor key to entity ID formatted for InfluxDB (without 'sensor.' prefix).
 
@@ -2446,12 +2451,6 @@ class HomeAssistantAPIController:
 
         Returns (sensor_key, entity_id) if matched, None otherwise.
         """
-        if "solcast" in lower_id and "peak" not in lower_id:
-            if "forecast_today" in lower_id:
-                return "solar_forecast_today", entity_id
-            if "forecast_tomorrow" in lower_id:
-                return "solar_forecast_tomorrow", entity_id
-
         if entity_id.startswith("weather."):
             return "weather_entity", entity_id
 
@@ -2566,22 +2565,28 @@ class HomeAssistantAPIController:
 
         return None
 
-    def discover_optional_sensors(self, states: list[dict]) -> dict[str, str]:
-        """Discover optional integration sensors from entity states.
+    def discover_optional_sensors(
+        self, states: list[dict], entity_registry: list[dict] | None = None
+    ) -> dict[str, str]:
+        """Discover optional integration sensors.
 
-        Scans all entity states for sensors belonging to optional integrations:
-        - Solcast solar forecast (forecast_today / forecast_tomorrow)
-        - Weather entity for temperature derating
-        - 48h average grid import (consumption forecast)
-        - Discharge inhibit binary sensor
+        Uses the entity registry (unique_id) for Solcast and entity states
+        for weather, consumption forecast, and discharge inhibit sensors.
 
         Args:
             states: List of state dicts from /api/states
+            entity_registry: Entity registry list (for Solcast detection).
 
         Returns:
             dict mapping sensor_key -> entity_id for detected optional sensors
         """
         result: dict[str, str] = {}
+
+        if entity_registry is not None:
+            solcast = self._map_registry_entities(
+                entity_registry, ["solcast_solar"], self.SOLCAST_SUFFIX_MAP
+            )
+            result.update(solcast)
 
         for state in states:
             entity_id = str(state.get("entity_id", ""))
@@ -2592,7 +2597,6 @@ class HomeAssistantAPIController:
                 continue
             key, matched_id = match
 
-            # Weather: prefer "weather.home" over arbitrary matches
             if key == "weather_entity":
                 if key not in result or matched_id == "weather.home":
                     result[key] = matched_id

@@ -89,7 +89,7 @@ export const EXPECTATIONS: Record<string, WizardExpectation> = {
     entsoeFound: true,
     autoSelectedProvider: 'entsoe',
     phaseCount: 3,
-    solcastFound: false,
+    solcastFound: true,
     consumptionForecastFound: false,
     dischargeInhibitFound: false,
     weatherFound: false,
