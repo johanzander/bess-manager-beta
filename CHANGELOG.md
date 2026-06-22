@@ -6,15 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
-## [9.6.2b1] - 2026-06-21
+## [9.6.2b1] - 2026-06-22
 
 ### Added
 
 - **ENTSO-e / Belpex price provider** (experimental) — New `entsoe` energy provider reads day-ahead spot prices from the [ENTSO-e Transparency Platform](https://github.com/JaccoR/hass-entso-e) HA integration. Auto-detected by the setup wizard. (#126)
 - **Generalized pricing formula** — New `spot_multiplier` and `export_spot_multiplier` fields support Belgian-style dynamic contracts where the supplier applies a multiplicative factor to the spot price. Formula: `buy = (spot × multiplier + markup) × VAT + costs`, `sell = spot × export_multiplier + compensation`. Defaults to 1.0 (no change for existing Nordic users). (#126)
-- **Provider-specific pricing defaults** — Switching provider in the wizard/settings now pre-fills appropriate defaults (e.g. ENTSO-e → VAT 1.06 for Belgium, Nordpool → VAT 1.25 for Sweden). (#126)
+- **Provider-specific pricing defaults** — Switching provider in the wizard/settings now pre-fills appropriate defaults (e.g. ENTSO-e → Luminus Dynamic values for Belgium, Nordpool → Swedish defaults). (#126)
 - **Backend-driven currency detection** — Currency is now auto-detected from the provider in the backend (ENTSO-e → EUR, Octopus → GBP), not hardcoded in the frontend. (#126)
 - **Real-world regression scenario** — Frank's ENTSO-e/Belpex + Growatt MOD (SolaX Modbus GEN4) config locked into both backend discovery tests and frontend wizard E2E. (#126)
+- **Solcast entities in debug export** — Debug data exporter now captures `solcast_solar` platform entities in the entity registry, enabling Solcast discovery from debug logs.
+
+### Fixed
+
+- **Solcast detection failed with non-English entity names** — Solcast sensors were matched by entity_id substring (`forecast_today`), which broke for translated names (e.g. Dutch `voorspelling_vandaag`). Now uses entity registry `unique_id` matching, consistent with all other platform detections. (#126)
+- **Default consumption strategy was "fixed" instead of "HA Statistics"** — New installs and the setup wizard now default to `ha_statistics` as the consumption prediction strategy.
 
 ## [9.6.1] - 2026-06-21
 
