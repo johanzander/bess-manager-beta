@@ -172,7 +172,7 @@ const SettingsPage: React.FC = () => {
 
       const h: HomeForm = {
         consumption: home_s.defaultHourly ?? 3.5,
-        consumptionStrategy: home_s.consumptionStrategy ?? 'sensor',
+        consumptionStrategy: home_s.consumptionStrategy ?? 'ha_statistics',
         maxFuseCurrent: home_s.maxFuseCurrent ?? 25,
         voltage: home_s.voltage ?? 230,
         safetyMarginFactor: home_s.safetyMargin ?? 1.0,
