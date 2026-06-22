@@ -30,10 +30,10 @@ export function HomeFormSection({ form, onChange, sensors }: Props) {
         {radioGroup(
           'Data source',
           [
+            { value: 'ha_statistics', label: 'HA Statistics (7-day hourly profile)', disabled: !haStatsSensorConfigured },
             { value: 'fixed', label: 'Fixed value' },
             { value: 'sensor', label: 'Home Assistant sensor' },
             { value: 'influxdb_7d_avg', label: 'InfluxDB (requires InfluxDB integration)', disabled: !localLoadSensorConfigured },
-            { value: 'ha_statistics', label: 'HA Statistics (7-day hourly profile)', disabled: !haStatsSensorConfigured },
           ],
           form.consumptionStrategy,
           v => onChange({ ...form, consumptionStrategy: v }),

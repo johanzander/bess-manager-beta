@@ -15,12 +15,8 @@ This skill orchestrates other skills — it does not re-implement them:
 
 - **Gates are human-in-the-loop.** Stages 2 and 5 wait for the user. Do not
   fabricate logs or confirmation. Post a clear ask, then stop and poll.
-- **Communicate in the open, as the agent.** Post every ask and result on the
-  PR/issue. Automation comments (status, "please test", CI results) go through
-  **`scripts/gh-agent.sh`** so they appear as `bess-agent`, not the maintainer.
-  Reserve plain `gh` (the human) for genuine maintainer voice — answering issue
-  authors' questions, product decisions, approving graduation to prod. The PR is
-  the source of truth for lifecycle state.
+- **Communicate in the open.** Use `gh pr comment` / `gh issue comment` for every
+  ask and every result. The PR is the source of truth for lifecycle state.
 - **Never claim real-world validation** until Stage 5. Keep the `experimental`
   marker until the user confirms against their own hardware.
 - **Track state with a checklist** in the PR body (one box per stage) so a
@@ -144,5 +140,4 @@ drop only at a meaningful checkpoint, with one combined CHANGELOG entry.
 | Backend regression harness | `core/bess/tests/unit/test_scenario_discovery.py` |
 | Frontend wizard E2E | `e2e/tests/setup-wizard.spec.ts`, `e2e/run-e2e.sh`, `.github/workflows/ci.yml` |
 | Maturity record | project maturity memory (`docs/agents/memory/`) + `README.md` |
-| Agent comms (automation) | `scripts/gh-agent.sh pr comment` / `issue comment` (posts as `bess-agent`), `gh pr checks --watch` |
-| Maintainer voice | plain `gh` (posts as the human) — answering issue authors, prod/graduation approval |
+| Agent comms | `gh pr comment`, `gh issue comment`, `gh pr checks --watch` |

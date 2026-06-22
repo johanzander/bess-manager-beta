@@ -22,6 +22,7 @@ from .dp_schedule import DPSchedule
 from .entsoe_source import EntsoeSource
 from .exceptions import (
     HAStatisticsUnavailableError,
+    HistoricalDataUnavailableError,
     SystemConfigurationError,
 )
 from .growatt_min_controller import GrowattMinController
@@ -135,6 +136,8 @@ class BatterySystemManager:
             additional_costs=self.price_settings.additional_costs,
             tax_reduction=self.price_settings.tax_reduction,
             area=self.price_settings.area,
+            spot_multiplier=self.price_settings.spot_multiplier,
+            export_spot_multiplier=self.price_settings.export_spot_multiplier,
         )
 
         # Initialize monitors (created in start() if controller available)
@@ -1333,75 +1336,94 @@ class BatterySystemManager:
                 f"Collecting data for previous period: {prev_period} ({format_period(prev_period)})"
             )
 
-            # Use sensor collector to get complete energy data with detailed flows
-            # Uses live sensors for current data (fast)
-            # Falls back to InfluxDB for historical data at startup/restart
-            energy_data = self.sensor_collector.collect_energy_data(prev_period)
+            # Use sensor collector to get complete energy data with detailed flows.
+            # Uses live sensors for current data; reconstructs from InfluxDB during
+            # startup/restart backfill. InfluxDB historical reconstruction is an
+            # optional enhancement (it only backfills the actuals/savings view) —
+            # if it is unavailable we surface it and skip this period's actuals,
+            # because the optimization itself runs on live SOC + the configured
+            # forecast (see _gather_optimization_data, which falls back to
+            # predictions for any period without recorded actuals).
+            try:
+                energy_data = self.sensor_collector.collect_energy_data(prev_period)
 
-            logger.info(
-                f"Collected energy data for period {prev_period} ({format_period(prev_period)}) - "
-                f"Solar: {energy_data.solar_production:.3f} kWh, "
-                f"Load: {energy_data.home_consumption:.3f} kWh, "
-                f"SOC: {energy_data.battery_soe_start:.1f}% → {energy_data.battery_soe_end:.1f}%"
-            )
-
-            # Get prices for this period
-            buy_prices, sell_prices = self.price_manager.get_available_prices()
-            if 0 <= prev_period < len(buy_prices):
-                buy_price = buy_prices[prev_period]
-                sell_price = sell_prices[prev_period]
-
-                # Calculate battery cycle cost based on actual charging
-                battery_cycle_cost_sek = (
-                    energy_data.battery_charged
-                    * self.battery_settings.cycle_cost_per_kwh
-                )
-
-                # Calculate economic data from actual energy flows
-                economic_data = EconomicData.from_energy_data(
-                    energy_data=energy_data,
-                    buy_price=buy_price,
-                    sell_price=sell_price,
-                    battery_cycle_cost=battery_cycle_cost_sek,
-                )
-            else:
-                # Period beyond available prices
-                economic_data = EconomicData(
-                    buy_price=0.0, sell_price=0.0, hourly_savings=0.0
-                )
-
-            # Store using period-based API with both planned and observed intents
-            # Get DP-planned intent (authoritative) if available
-            planned_intent = self._get_planned_intent_for_period(prev_period)
-            # Infer observed intent from actual flows
-            battery_power = energy_data.battery_net_change
-            observed = infer_intent_from_flows(battery_power, energy_data)
-
-            period_data = PeriodData(
-                period=prev_period,
-                energy=energy_data,
-                timestamp=time_utils.now(),
-                data_source="actual",
-                economic=economic_data,
-                decision=DecisionData(
-                    strategic_intent=planned_intent or "IDLE",
-                    observed_intent=observed,
-                ),
-            )
-            self.historical_store.record_period(prev_period, period_data)
-            logger.info(
-                f"Recorded energy data for period {prev_period} ({format_period(prev_period)})"
-            )
-
-            # Verify storage
-            stored_data = self.historical_store.get_period(prev_period)
-            if stored_data:
                 logger.info(
-                    f"Verified: Period {prev_period} stored with intent {stored_data.decision.strategic_intent}"
+                    f"Collected energy data for period {prev_period} ({format_period(prev_period)}) - "
+                    f"Solar: {energy_data.solar_production:.3f} kWh, "
+                    f"Load: {energy_data.home_consumption:.3f} kWh, "
+                    f"SOC: {energy_data.battery_soe_start:.1f}% → {energy_data.battery_soe_end:.1f}%"
                 )
-            else:
-                raise RuntimeError(
-                    f"Failed to store energy data for period {prev_period}"
+
+                # Get prices for this period
+                buy_prices, sell_prices = self.price_manager.get_available_prices()
+                if 0 <= prev_period < len(buy_prices):
+                    buy_price = buy_prices[prev_period]
+                    sell_price = sell_prices[prev_period]
+
+                    # Calculate battery cycle cost based on actual charging
+                    battery_cycle_cost_sek = (
+                        energy_data.battery_charged
+                        * self.battery_settings.cycle_cost_per_kwh
+                    )
+
+                    # Calculate economic data from actual energy flows
+                    economic_data = EconomicData.from_energy_data(
+                        energy_data=energy_data,
+                        buy_price=buy_price,
+                        sell_price=sell_price,
+                        battery_cycle_cost=battery_cycle_cost_sek,
+                    )
+                else:
+                    # Period beyond available prices
+                    economic_data = EconomicData(
+                        buy_price=0.0, sell_price=0.0, hourly_savings=0.0
+                    )
+
+                # Store using period-based API with both planned and observed intents
+                # Get DP-planned intent (authoritative) if available
+                planned_intent = self._get_planned_intent_for_period(prev_period)
+                # Infer observed intent from actual flows
+                battery_power = energy_data.battery_net_change
+                observed = infer_intent_from_flows(battery_power, energy_data)
+
+                period_data = PeriodData(
+                    period=prev_period,
+                    energy=energy_data,
+                    timestamp=time_utils.now(),
+                    data_source="actual",
+                    economic=economic_data,
+                    decision=DecisionData(
+                        strategic_intent=planned_intent or "IDLE",
+                        observed_intent=observed,
+                    ),
+                )
+                self.historical_store.record_period(prev_period, period_data)
+                logger.info(
+                    f"Recorded energy data for period {prev_period} ({format_period(prev_period)})"
+                )
+
+                # Verify storage
+                stored_data = self.historical_store.get_period(prev_period)
+                if stored_data:
+                    logger.info(
+                        f"Verified: Period {prev_period} stored with intent {stored_data.decision.strategic_intent}"
+                    )
+                else:
+                    raise RuntimeError(
+                        f"Failed to store energy data for period {prev_period}"
+                    )
+            except HistoricalDataUnavailableError as e:
+                # Optional dependency: keep optimizing on live SOC + forecast.
+                # The gap is already surfaced to the user by the dedicated
+                # "Incomplete Historical Data" dashboard banner, so we do not
+                # also raise a runtime-error alert here — that panel is reserved
+                # for unexpected, actionable failures.
+                logger.warning(
+                    "Historical data unavailable for period %d (%s): %s — "
+                    "skipping actuals, optimization continues",
+                    prev_period,
+                    format_period(prev_period),
+                    e,
                 )
 
         else:
@@ -1512,14 +1534,25 @@ class BatterySystemManager:
                 if self._consumption_predictions
                 else self._get_consumption_forecast()
             )
-            solar_predictions = self.controller.get_solar_forecast()
+            # The next-day schedule must be built from tomorrow's solar forecast,
+            # not today's. Mirror the extended-horizon branch's zeros fallback when
+            # tomorrow's forecast is unavailable.
+            try:
+                solar_predictions = self.controller.get_solar_forecast_tomorrow()
+            except SystemConfigurationError:
+                tomorrow_date = date.today() + timedelta(days=1)
+                solar_predictions = [0.0] * get_period_count(tomorrow_date)
+                logger.info(
+                    "Tomorrow's solar forecast unavailable, using zeros for next-day schedule"
+                )
 
             consumption_data = consumption_predictions
             solar_data = solar_predictions
 
-            # Initialize all periods with minimal SOC for next day
-            initial_soe = self.battery_settings.min_soe_kwh
-            combined_soe = [initial_soe] * period_count
+            # Seed the next-day plan from the real current SOC. This runs at
+            # 23:55, so current SOC is ~= tomorrow's starting SOC; assuming min
+            # SOC here would discard energy actually in the battery.
+            combined_soe = [current_soe] * period_count
 
             optimization_period = 0
 
@@ -2766,6 +2799,7 @@ class BatterySystemManager:
                 self.battery_settings.update(**settings["battery"])
 
             if "home" in settings:
+                prev_strategy = self.home_settings.consumption_strategy
                 self.home_settings.update(**settings["home"])
                 # If power monitoring was just enabled and the monitor hasn't been
                 # created yet (disabled at startup), instantiate it now so it takes
@@ -2781,6 +2815,10 @@ class BatterySystemManager:
                         home_settings=self.home_settings,
                         battery_settings=self.battery_settings,
                     )
+                # Refresh the prediction cache immediately when the consumption
+                # strategy changes so the next optimization uses the new source.
+                if self.home_settings.consumption_strategy != prev_strategy:
+                    self._consumption_predictions = None
 
             if "price" in settings:
                 self.price_settings.update(**settings["price"])
@@ -2791,6 +2829,12 @@ class BatterySystemManager:
                 )
                 self._price_manager.tax_reduction = self.price_settings.tax_reduction
                 self._price_manager.area = self.price_settings.area
+                self._price_manager.spot_multiplier = (
+                    self.price_settings.spot_multiplier
+                )
+                self._price_manager.export_spot_multiplier = (
+                    self.price_settings.export_spot_multiplier
+                )
                 self._price_manager.clear_cache()
 
             if "energy_provider" in settings:

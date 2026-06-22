@@ -991,6 +991,8 @@ class APISetupCompletePayload(BaseModel):
     vatMultiplier: float | None = None
     additionalCosts: float | None = None
     taxReduction: float | None = None
+    spotMultiplier: float | None = None
+    exportSpotMultiplier: float | None = None
     # Energy provider
     provider: str | None = None
     # Nordpool HACS entity (required when provider == "nordpool_hacs")
@@ -1004,6 +1006,8 @@ class APISetupCompletePayload(BaseModel):
     entsoeEntity: str | None = None
     # Inverter
     inverterPlatform: str | None = None
+    # Control mode
+    demoMode: bool | None = None
 
     @field_validator("sensors")
     @classmethod

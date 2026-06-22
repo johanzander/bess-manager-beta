@@ -66,33 +66,6 @@ class HomeAssistantAPIController:
             description = self._get_sensor_display_name(sensor_key)
             raise ValueError(f"No entity ID configured for {description}") from e
 
-    def _get_sensor_key(self, method_name: str) -> str | None:
-        """Get the sensor key for a method - compatibility method for existing code."""
-        return self.get_method_sensor_key(method_name)
-
-    @classmethod
-    def get_method_info(cls, method_name: str) -> dict[str, object] | None:
-        """Get method information including sensor key and display name."""
-        return cls.METHOD_SENSOR_MAP.get(method_name)
-
-    @classmethod
-    def get_method_name(cls, method_name: str) -> str | None:
-        """Get the display name for a method."""
-        method_info = cls.METHOD_SENSOR_MAP.get(method_name)
-        if method_info:
-            name = method_info["name"]
-            return str(name) if name else None
-        return None
-
-    @classmethod
-    def get_method_sensor_key(cls, method_name: str) -> str | None:
-        """Get the sensor key for a method."""
-        method_info = cls.METHOD_SENSOR_MAP.get(method_name)
-        if method_info:
-            sensor_key = method_info["sensor_key"]
-            return str(sensor_key) if sensor_key else None
-        return None
-
     def __init__(
         self,
         ha_url: str,
@@ -451,7 +424,6 @@ class HomeAssistantAPIController:
         "battery_discharge_power_limit": "battery_discharging_power_rate",
         "battery_charge_soc_limit": "battery_charge_stop_soc",
         "battery_discharge_soc_limit": "battery_discharge_stop_soc",
-        "battery_discharge_soc_limit_on_grid": "battery_discharge_stop_soc",
         "soc_limit_on_grid": "battery_discharge_stop_soc",
         # ── Lifetime energy sensors ──────────────────────────────────────
         "lifetime_total_all_batteries_charged": "lifetime_battery_charged",
@@ -678,6 +650,11 @@ class HomeAssistantAPIController:
         "charger_use_mode": "solax_charger_use_mode",
     }
 
+    SOLCAST_SUFFIX_MAP: ClassVar[dict[str, str]] = {
+        "total_kwh_forecast_today": "solar_forecast_today",
+        "total_kwh_forecast_tomorrow": "solar_forecast_tomorrow",
+    }
+
     def resolve_sensor_for_influxdb(self, sensor_key: str) -> str | None:
         """Resolve sensor key to entity ID formatted for InfluxDB (without 'sensor.' prefix).
 
@@ -844,27 +821,6 @@ class HomeAssistantAPIController:
             requests.RequestException: If all retries fail
 
         """
-        # List of operations that modify state (write operations)
-        write_operations = [
-            ("post", "/api/services/growatt_server/update_tlx_inverter_time_segment"),
-            ("post", "/api/services/switch/turn_on"),
-            ("post", "/api/services/switch/turn_off"),
-            ("post", "/api/services/number/set_value"),
-        ]
-
-        # Check if this is a write operation and we're in test mode
-        is_write_operation = (method.lower(), path) in write_operations
-
-        # Test mode only blocks write operations, never read operations
-        if self.test_mode and is_write_operation:
-            logger.info(
-                "[TEST MODE] Would call %s %s with args: %s",
-                method.upper(),
-                path,
-                kwargs.get("json", {}),
-            )
-            return None
-
         url = f"{self.base_url}{path}"
         logger.debug("Making API request to %s %s", method.upper(), url)
         for attempt in range(self.max_attempts):
@@ -1108,7 +1064,8 @@ class HomeAssistantAPIController:
             SystemConfigurationError: If sensor data is unavailable
         """
         raw_value = self._get_sensor_value("48h_avg_grid_import")
-        assert raw_value is not None, "48h_avg_grid_import sensor not available"
+        if raw_value is None:
+            raise SystemConfigurationError("48h_avg_grid_import sensor not available")
         avg_hourly_consumption = raw_value / 1000
 
         # Convert hourly average to quarterly by dividing by 4
@@ -1126,7 +1083,8 @@ class HomeAssistantAPIController:
             operation="Read HA config",
             category="config",
         )
-        assert response is not None, "HA /api/config returned no data"
+        if response is None:
+            raise SystemConfigurationError("HA /api/config returned no data")
         return response
 
     def get_battery_soc(self):
@@ -2231,7 +2189,8 @@ class HomeAssistantAPIController:
             operation="Fetch all entity states",
             category="config",
         )
-        assert states is not None, "HA /api/states returned no data"
+        if states is None:
+            raise SystemConfigurationError("HA /api/states returned no data")
         return states
 
     # Maps Nordpool area code prefix → (currency, vat_multiplier).
@@ -2492,12 +2451,6 @@ class HomeAssistantAPIController:
 
         Returns (sensor_key, entity_id) if matched, None otherwise.
         """
-        if "solcast" in lower_id and "peak" not in lower_id:
-            if "forecast_today" in lower_id:
-                return "solar_forecast_today", entity_id
-            if "forecast_tomorrow" in lower_id:
-                return "solar_forecast_tomorrow", entity_id
-
         if entity_id.startswith("weather."):
             return "weather_entity", entity_id
 
@@ -2612,22 +2565,28 @@ class HomeAssistantAPIController:
 
         return None
 
-    def discover_optional_sensors(self, states: list[dict]) -> dict[str, str]:
-        """Discover optional integration sensors from entity states.
+    def discover_optional_sensors(
+        self, states: list[dict], entity_registry: list[dict] | None = None
+    ) -> dict[str, str]:
+        """Discover optional integration sensors.
 
-        Scans all entity states for sensors belonging to optional integrations:
-        - Solcast solar forecast (forecast_today / forecast_tomorrow)
-        - Weather entity for temperature derating
-        - 48h average grid import (consumption forecast)
-        - Discharge inhibit binary sensor
+        Uses the entity registry (unique_id) for Solcast and entity states
+        for weather, consumption forecast, and discharge inhibit sensors.
 
         Args:
             states: List of state dicts from /api/states
+            entity_registry: Entity registry list (for Solcast detection).
 
         Returns:
             dict mapping sensor_key -> entity_id for detected optional sensors
         """
         result: dict[str, str] = {}
+
+        if entity_registry is not None:
+            solcast = self._map_registry_entities(
+                entity_registry, ["solcast_solar"], self.SOLCAST_SUFFIX_MAP
+            )
+            result.update(solcast)
 
         for state in states:
             entity_id = str(state.get("entity_id", ""))
@@ -2638,7 +2597,6 @@ class HomeAssistantAPIController:
                 continue
             key, matched_id = match
 
-            # Weather: prefer "weather.home" over arbitrary matches
             if key == "weather_entity":
                 if key not in result or matched_id == "weather.home":
                     result[key] = matched_id

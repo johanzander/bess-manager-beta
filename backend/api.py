@@ -155,6 +155,7 @@ _SECTION_MAP: dict[str, str] = {
     "inverter": "inverter",
     "sensors": "sensors",
     "aiAnalyst": "ai_analyst",
+    "demoMode": "demo_mode",
 }
 
 # Derived from the BatterySettings dataclass — fields with init=True are the
@@ -275,6 +276,15 @@ async def patch_settings(updates: dict):
                 bess_controller.system.update_settings({"price": section})
 
             elif store_key == "energy_provider":
+                # Auto-set currency when provider implies a specific one
+                _PROVIDER_CURRENCY = {"octopus": "GBP", "entsoe": "EUR"}
+                auto_currency = _PROVIDER_CURRENCY.get(section.get("provider", ""))
+                if auto_currency:
+                    home_sec = bess_controller.settings_store.get_section("home")
+                    if home_sec.get("currency") != auto_currency:
+                        home_sec["currency"] = auto_currency
+                        bess_controller.settings_store.save_section("home", home_sec)
+                        bess_controller.system.update_settings({"home": home_sec})
                 # Apply the new provider live so a restart is not required when
                 # switching between nordpool, nordpool_official, and octopus.
                 bess_controller.system.update_settings({"energy_provider": section})
@@ -314,6 +324,10 @@ async def patch_settings(updates: dict):
                 bess_controller.ha_controller.sensors = {
                     k: v for k, v in active.items() if v
                 }
+
+            elif store_key == "demo_mode":
+                enabled = section.get("enabled", False)
+                bess_controller.ha_controller.set_test_mode(enabled)
 
         _refresh_health(bess_controller)
         return await get_settings()
@@ -1882,14 +1896,17 @@ async def get_dashboard_health_summary():
                 logger.warning(
                     "No cached health results available, returning minimal response"
                 )
-                return {
+                summary = {
                     "has_critical_errors": False,
                     "has_warnings": False,
                     "critical_issues": [],
                     "total_critical_issues": 0,
                     "timestamp": datetime.now().isoformat(),
-                    "system_mode": "unknown",
+                    "system_mode": (
+                        "demo" if bess_controller.ha_controller.test_mode else "unknown"
+                    ),
                 }
+                return convert_keys_to_camel_case(summary)
 
             # Extract critical and warning information
             critical_issues = []
@@ -2730,6 +2747,55 @@ async def get_setup_status():
     )
 
 
+_PROVIDER_PRICING_DEFAULTS: dict[str, dict] = {
+    "nordpool_official": {
+        "markupRate": 0.08,
+        "vatMultiplier": 1.25,
+        "additionalCosts": 0.773,
+        "taxReduction": 0.20,
+        "spotMultiplier": 1.0,
+        "exportSpotMultiplier": 1.0,
+    },
+    "nordpool_hacs": {
+        "markupRate": 0.08,
+        "vatMultiplier": 1.25,
+        "additionalCosts": 0.773,
+        "taxReduction": 0.20,
+        "spotMultiplier": 1.0,
+        "exportSpotMultiplier": 1.0,
+    },
+    "entsoe": {
+        "markupRate": 0.198,
+        "vatMultiplier": 1.06,
+        "additionalCosts": 0.0,
+        "taxReduction": -0.012685,
+        "spotMultiplier": 1.0175,
+        "exportSpotMultiplier": 1.018,
+    },
+    "octopus": {
+        "markupRate": 0.0,
+        "vatMultiplier": 1.0,
+        "additionalCosts": 0.0,
+        "taxReduction": 0.0,
+        "spotMultiplier": 1.0,
+        "exportSpotMultiplier": 1.0,
+    },
+}
+
+
+def _pricing_defaults_for_discovery(integrations: dict) -> dict:
+    """Return pricing defaults matching the auto-detected provider."""
+    if integrations.get("octopus_found") and not integrations.get("nordpool_found"):
+        return _PROVIDER_PRICING_DEFAULTS["octopus"]
+    if integrations.get("entsoe_found") and not integrations.get("nordpool_found"):
+        return _PROVIDER_PRICING_DEFAULTS["entsoe"]
+    if integrations.get("nordpool_config_entry_id"):
+        return _PROVIDER_PRICING_DEFAULTS["nordpool_official"]
+    if integrations.get("nordpool_custom_area"):
+        return _PROVIDER_PRICING_DEFAULTS["nordpool_hacs"]
+    return _PROVIDER_PRICING_DEFAULTS["nordpool_official"]
+
+
 @router.post("/api/setup/discover")
 async def run_setup_discovery():
     """Run auto-discovery of inverter and pricing integrations.
@@ -2849,7 +2915,7 @@ async def run_setup_discovery():
                 sensors[phase_key] = entity_id
 
         # Discover optional integration sensors (Solcast, Weather, EV, etc.)
-        optional_sensors = ha.discover_optional_sensors(states)
+        optional_sensors = ha.discover_optional_sensors(states, registry)
         for key, entity_id in optional_sensors.items():
             if key not in sensors:
                 sensors[key] = entity_id
@@ -2891,6 +2957,7 @@ async def run_setup_discovery():
                 "detected_phase_count": detected_phase_count,
                 "currency": integrations["currency"],
                 "vat_multiplier": integrations["vat_multiplier"],
+                "pricingDefaults": _pricing_defaults_for_discovery(integrations),
             }
         )
         # Attach sensor dicts without key conversion
@@ -2939,61 +3006,68 @@ async def setup_complete(payload: APISetupCompletePayload):
         # All sections use read-modify-write so that keys not managed by the wizard
         # (e.g. temperature_derating in battery, config_entry_id in energy_provider)
         # are preserved when save_all replaces the section.
+        #
+        # Each section is driven by a mapping of payload-field-name → store-key.
+        # Adding a new wizard field only requires adding one entry to the mapping;
+        # the guard and the write are both derived from it automatically.
 
         # --- battery ---
-        if payload.totalCapacity is not None:
+        # maxChargeDischargePower maps to two store keys — handled separately below.
+        _BATTERY_MAP = {
+            "totalCapacity": "total_capacity",
+            "minSoc": "min_soc",
+            "maxSoc": "max_soc",
+            "cycleCost": "cycle_cost_per_kwh",
+            "minActionProfitThreshold": "min_action_profit_threshold",
+        }
+        if any(getattr(payload, f) is not None for f in _BATTERY_MAP) or (
+            payload.maxChargeDischargePower is not None
+        ):
             battery = bess_controller.settings_store.get_section("battery")
-            battery["total_capacity"] = payload.totalCapacity
-            if payload.minSoc is not None:
-                battery["min_soc"] = payload.minSoc
-            if payload.maxSoc is not None:
-                battery["max_soc"] = payload.maxSoc
+            for field, key in _BATTERY_MAP.items():
+                if getattr(payload, field) is not None:
+                    battery[key] = getattr(payload, field)
             if payload.maxChargeDischargePower is not None:
                 battery["max_charge_power_kw"] = payload.maxChargeDischargePower
                 battery["max_discharge_power_kw"] = payload.maxChargeDischargePower
-            if payload.cycleCost is not None:
-                battery["cycle_cost_per_kwh"] = payload.cycleCost
-            if payload.minActionProfitThreshold is not None:
-                battery["min_action_profit_threshold"] = (
-                    payload.minActionProfitThreshold
-                )
             sections["battery"] = battery
 
         # --- home ---
-        if payload.currency is not None or payload.consumption is not None:
+        _HOME_MAP = {
+            "consumption": "default_hourly",
+            "currency": "currency",
+            "consumptionStrategy": "consumption_strategy",
+            "maxFuseCurrent": "max_fuse_current",
+            "voltage": "voltage",
+            "safetyMarginFactor": "safety_margin",
+            "phaseCount": "phase_count",
+            "powerMonitoringEnabled": "power_monitoring_enabled",
+        }
+        if any(getattr(payload, f) is not None for f in _HOME_MAP):
             home = bess_controller.settings_store.get_section("home")
-            if payload.consumption is not None:
-                home["default_hourly"] = payload.consumption
-            if payload.currency is not None:
-                home["currency"] = payload.currency
-            if payload.consumptionStrategy is not None:
-                home["consumption_strategy"] = payload.consumptionStrategy
-            if payload.maxFuseCurrent is not None:
-                home["max_fuse_current"] = payload.maxFuseCurrent
-            if payload.voltage is not None:
-                home["voltage"] = payload.voltage
-            if payload.safetyMarginFactor is not None:
-                home["safety_margin"] = payload.safetyMarginFactor
-            if payload.phaseCount is not None:
-                home["phase_count"] = payload.phaseCount
-            if payload.powerMonitoringEnabled is not None:
-                home["power_monitoring_enabled"] = payload.powerMonitoringEnabled
+            for field, key in _HOME_MAP.items():
+                if getattr(payload, field) is not None:
+                    home[key] = getattr(payload, field)
             sections["home"] = home
 
         # --- electricity price ---
-        if payload.markupRate is not None or payload.vatMultiplier is not None:
+        # area can also come from nordpoolArea (discovery) — handled separately.
+        _PRICE_MAP = {
+            "markupRate": "markup_rate",
+            "vatMultiplier": "vat_multiplier",
+            "additionalCosts": "additional_costs",
+            "taxReduction": "tax_reduction",
+            "spotMultiplier": "spot_multiplier",
+            "exportSpotMultiplier": "export_spot_multiplier",
+        }
+        area = payload.area or payload.nordpoolArea
+        if any(getattr(payload, f) is not None for f in _PRICE_MAP) or area:
             elec = bess_controller.settings_store.get_section("electricity_price")
-            area = payload.area or payload.nordpoolArea
             if area:
                 elec["area"] = area
-            if payload.markupRate is not None:
-                elec["markup_rate"] = payload.markupRate
-            if payload.vatMultiplier is not None:
-                elec["vat_multiplier"] = payload.vatMultiplier
-            if payload.additionalCosts is not None:
-                elec["additional_costs"] = payload.additionalCosts
-            if payload.taxReduction is not None:
-                elec["tax_reduction"] = payload.taxReduction
+            for field, key in _PRICE_MAP.items():
+                if getattr(payload, field) is not None:
+                    elec[key] = getattr(payload, field)
             sections["electricity_price"] = elec
 
         # --- energy provider ---
@@ -3020,6 +3094,16 @@ async def setup_complete(payload: APISetupCompletePayload):
                 ep["entsoe"] = {"entity": payload.entsoeEntity}
             sections["energy_provider"] = ep
 
+            # Auto-set currency from provider when not explicitly provided
+            _PROVIDER_CURRENCY = {"octopus": "GBP", "entsoe": "EUR"}
+            auto_currency = _PROVIDER_CURRENCY.get(payload.provider or "")
+            if auto_currency and payload.currency is None:
+                home = sections.get(
+                    "home"
+                ) or bess_controller.settings_store.get_section("home")
+                home["currency"] = auto_currency
+                sections["home"] = home
+
         # --- inverter ---
         if payload.inverterPlatform is not None:
             _platform = payload.inverterPlatform
@@ -3036,6 +3120,10 @@ async def setup_complete(payload: APISetupCompletePayload):
                 growatt_section = bess_controller.settings_store.get_section("growatt")
                 growatt_section["device_id"] = payload.growattDeviceId
                 sections["growatt"] = growatt_section
+
+        # --- demo mode ---
+        if payload.demoMode is not None:
+            sections["demo_mode"] = {"enabled": payload.demoMode}
 
         # Persist all sections atomically
         bess_controller.settings_store.save_all(sections)
@@ -3108,6 +3196,10 @@ async def setup_complete(payload: APISetupCompletePayload):
             bess_controller.system.update_settings(
                 {"energy_provider": sections["energy_provider"]}
             )
+
+        # Apply demo mode live
+        if payload.demoMode is not None:
+            bess_controller.ha_controller.set_test_mode(payload.demoMode)
 
         # Backfill historical data in the background (may take many seconds for 20+
         # InfluxDB queries), then build the schedule with correct historical context.

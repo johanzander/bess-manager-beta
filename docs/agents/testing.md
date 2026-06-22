@@ -175,10 +175,27 @@ python scripts/mock_ha/scenarios/from_debug_log.py <debug-log-file.md>
 After applying the fix and running mock HA, check `http://localhost:8123/mock/service_log`
 to see what TOU segments BESS sent to the inverter. Compare with expected behavior.
 
+## Plan-Faithfulness Simulator (`R == P`)
+
+When you change the optimizer, intent classification, or inverter control
+mapping, a passing plan-only test means nothing if the plan isn't faithfully
+executable by the hardware. The plan-faithfulness simulator
+(`core/bess/simulation/`) closes that loop and is **REQUIRED** verification for
+any such change.
+
+**Full reference: [`simulator.md`](simulator.md)** — the `R == P` invariant, the
+API (`derive_control_command` / `simulate` / `verify_plan_faithfulness`), the
+`run_scenario_realized` helper, the `xfail` policy, and what it has caught.
+
 ## Test Data
 
 JSON scenario fixtures live in `core/bess/tests/unit/data/`.
 Name them descriptively: `high_solar_export.json`, `ev_charging_overnight.json`.
+
+Scenarios may carry `expected_results` (plan economics) and `expected_behavior`
+(intent presence/absence, `savings_positive`). When the optimizer legitimately
+changes behavior, regenerate these **from the optimizer** (store `expected_results`
+at ≥4 decimals to avoid 1-dp rounding-boundary flips) rather than hand-editing.
 
 ## Red Flags
 

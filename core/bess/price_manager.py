@@ -389,23 +389,17 @@ class PriceManager:
         additional_costs: float,
         tax_reduction: float,
         area: str,
+        spot_multiplier: float = 1.0,
+        export_spot_multiplier: float = 1.0,
     ) -> None:
-        """Initialize the price manager.
-
-        Args:
-            price_source: Source of raw Nordpool prices
-            markup_rate: Markup rate applied to buy prices
-            vat_multiplier: VAT multiplier applied to buy prices
-            additional_costs: Additional fixed costs added to buy prices
-            tax_reduction: Tax reduction applied to sell prices
-            area: Price area code (e.g. "SE4", "NO1", "DK1")
-        """
         self.price_source = price_source
         self.markup_rate = markup_rate
         self.vat_multiplier = vat_multiplier
         self.additional_costs = additional_costs
         self.tax_reduction = tax_reduction
         self.area = area
+        self.spot_multiplier = spot_multiplier
+        self.export_spot_multiplier = export_spot_multiplier
         self._logger = logging.getLogger(__name__)
 
         # Cache for today's prices
@@ -428,27 +422,13 @@ class PriceManager:
         self._tomorrow_date = None
 
     def _calculate_buy_price(self, base_price: float) -> float:
-        """Calculate retail buy price from Nordpool base price.
-
-        Args:
-            base_price: Raw Nordpool price (VAT-exclusive)
-
-        Returns:
-            Calculated retail price
-        """
-        result = (base_price + self.markup_rate) * self.vat_multiplier
+        result = (
+            base_price * self.spot_multiplier + self.markup_rate
+        ) * self.vat_multiplier
         return result + self.additional_costs
 
     def _calculate_sell_price(self, base_price: float) -> float:
-        """Calculate sell-back price from Nordpool base price.
-
-        Args:
-            base_price: Raw Nordpool price (VAT-exclusive)
-
-        Returns:
-            Calculated sell-back price
-        """
-        return base_price + self.tax_reduction
+        return base_price * self.export_spot_multiplier + self.tax_reduction
 
     def get_price_data(self, target_date: date | None = None) -> list:
         """Get formatted price data for the specified date.
