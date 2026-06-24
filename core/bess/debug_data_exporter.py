@@ -631,7 +631,7 @@ class DebugDataAggregator:
                     )
 
         try:
-            resolved = controller.discover_ha_metadata(device_sn=None)
+            resolved = controller.discover_integrations()
         except Exception as e:
             resolved = {"error": str(e)}
 

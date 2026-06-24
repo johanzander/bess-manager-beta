@@ -155,4 +155,6 @@ When a draft PR is opened by the issue fixer, two notifications fire:
 
 ## Quality Gate
 
-Before any PR: `./scripts/quality-check.sh` must pass with zero errors.
+Before any PR or beta push:
+1. `./scripts/quality-check.sh` must pass with zero errors.
+2. Run `/code-review` on the diff and address any correctness findings before pushing.

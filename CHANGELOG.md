@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
+## [9.6.2b2] - 2026-06-24
+
+### Fixed
+
+- **Load First interference** — `SolaxModbusGrowattController` was writing `ems_discharging_rate=0` for all modes including `load_first`, overriding the inverter's own Load First logic and causing grid imports. The EMS register is now only written for `battery_first` and `grid_first` modes. (#126)
+- **Currency not auto-set for ENTSO-e users** — Setup wizard was not overwriting an existing currency value (e.g. SEK from a prior Nordpool config) when switching to ENTSO-e. EUR is now always applied when ENTSO-e is selected. (#126)
+- **Debug export missing ENTSO-e discovery fields** — The debug exporter was using a partial discovery method that omitted `entsoe_found`, `solcast_found`, and `currency` from the "Resolved by BESS" section. It now uses the full `discover_integrations()` path. (#126)
+
 ## [9.6.2b1] - 2026-06-22
 
 ### Added
