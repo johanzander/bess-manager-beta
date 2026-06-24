@@ -51,7 +51,7 @@ export function PricingFormSection({ form, onChange }: Props) {
 
   const sm = form.spotMultiplier ?? 1.0;
   const esm = form.exportSpotMultiplier ?? 1.0;
-  const previewSpot = 1.0;
+  const previewSpot = 0.10;
   const previewBuy = Number(
     ((previewSpot * sm + form.markupRate) * form.vatMultiplier + form.additionalCosts).toFixed(4),
   );
@@ -192,7 +192,7 @@ export function PricingFormSection({ form, onChange }: Props) {
 
             <div className="rounded-lg bg-gray-50 dark:bg-gray-700/50 px-4 py-3 text-sm space-y-1.5">
               <p className="text-xs text-gray-500 dark:text-gray-400">
-                Preview at spot = 1.00 {currency}/kWh
+                Preview at spot = 0.10 {currency}/kWh
               </p>
               <div className="flex justify-between font-medium">
                 <span className="text-gray-700 dark:text-gray-200">Buy price</span>
