@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
+## [9.6.2b3] - 2026-06-24
+
+### Fixed
+
+- **Pricing settings preview** — Example calculation now uses spot = €0.10/kWh instead of €1.00/kWh, which is representative of typical Belpex/ENTSO-e prices. (#126)
+
 ## [9.6.2b2] - 2026-06-24
 
 ### Fixed
