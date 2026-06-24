@@ -2002,42 +2002,6 @@ class HomeAssistantAPIController:
                 return entity_id
         return None
 
-    def discover_ha_metadata(
-        self,
-        device_sn: str | None,
-        entity_registry: list[dict] | None = None,
-    ) -> dict:
-        """Discover HA-internal IDs via the WebSocket API.
-
-        Queries the config entry and device registries to find:
-        - Nordpool config_entry_id (required for nordpool.get_prices_for_date)
-        - Growatt device_id (HA device registry ID for service calls)
-
-        Args:
-            device_sn: Growatt device serial number to match, or None
-            entity_registry: Pre-fetched entity registry list, or None to fetch.
-
-        Returns:
-            dict with keys: growatt_device_id, nordpool_config_entry_id
-        """
-        commands = [
-            {"type": "config_entries/get"},
-            {"type": "config/device_registry/list"},
-        ]
-        if entity_registry is None:
-            commands.append({"type": "config/entity_registry/list"})
-
-        results = self._ws_query(commands)
-        config_entries_result = results[0]
-        devices_result = results[1]
-        entity_registry_result = (
-            entity_registry if entity_registry is not None else results[2]
-        )
-
-        return self._parse_ha_metadata(
-            device_sn, config_entries_result, devices_result, entity_registry_result
-        )
-
     def _parse_ha_metadata(
         self,
         device_sn: str | None,
@@ -2047,9 +2011,7 @@ class HomeAssistantAPIController:
     ) -> dict:
         """Parse config entries and device registry into BESS metadata.
 
-        Pure parsing — no WebSocket calls.  Called by both
-        ``discover_ha_metadata`` (standalone) and ``discover_integrations``
-        (which fetches everything in a single WS connection).
+        Pure parsing — no WebSocket calls.  Called by ``discover_integrations``.
 
         Returns:
             dict with keys: growatt_device_id, nordpool_config_entry_id,

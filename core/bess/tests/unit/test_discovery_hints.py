@@ -95,7 +95,7 @@ class TestHintsFromNordpoolArea:
 
 
 class TestInverterTypeDetection:
-    """Tests for the MIN/SPH heuristic in discover_ha_metadata.
+    """Tests for the MIN/SPH heuristic in _parse_ha_metadata.
 
     Detection uses entity registry unique_id prefixes:
       - tlx_ prefix → MIN (AC-coupled)
@@ -227,34 +227,22 @@ class TestPhaseCountDetection:
 
 
 # ---------------------------------------------------------------------------
-# discover_ha_metadata — nordpool area extraction from entity registry
+# _parse_ha_metadata — nordpool area extraction from device registry
 # ---------------------------------------------------------------------------
 
 
-class TestDiscoverHaMetadataNordpoolArea:
+class TestParseHaMetadataNordpoolArea:
     """Area is extracted from nordpool device identifiers in the device registry.
 
     The official HA nordpool integration creates a device with identifiers
     [["nordpool", "SE3"]].  The area is read from there, keyed by the
     config_entry_id.
+
+    Tests call _parse_ha_metadata directly — pure parsing, no WS calls.
     """
 
     def setup_method(self):
         self.ctrl = _make_controller()
-
-    def _ws_stub(
-        self,
-        config_entries: list[dict],
-        devices: list[dict] | None = None,
-    ):
-        """Return a _ws_query replacement with config entries and devices."""
-        # _ws_query returns [config_entries, devices, services, entity_registry]
-        return lambda cmds: [
-            config_entries,
-            devices or [],
-            {},
-            [],
-        ]
 
     def _nordpool_device(self, area: str, config_entry_id: str = "abc"):
         return {
@@ -265,63 +253,55 @@ class TestDiscoverHaMetadataNordpoolArea:
             "config_entries": [config_entry_id],
         }
 
-    def test_area_extracted_from_device_identifiers(self, monkeypatch):
+    def test_area_extracted_from_device_identifiers(self):
         """Area is parsed from the nordpool device identifiers."""
         entry = {"domain": "nordpool", "state": "loaded", "entry_id": "abc"}
         devices = [self._nordpool_device("SE3")]
-        monkeypatch.setattr(self.ctrl, "_ws_query", self._ws_stub([entry], devices))
-        result = self.ctrl.discover_ha_metadata(None)
+        result = self.ctrl._parse_ha_metadata(None, [entry], devices, [])
         assert result["nordpool_area"] == "SE3"
 
-    def test_area_is_uppercased(self, monkeypatch):
+    def test_area_is_uppercased(self):
         """Area codes are normalised to upper case."""
         entry = {"domain": "nordpool", "state": "loaded", "entry_id": "abc"}
         devices = [self._nordpool_device("se3")]
-        monkeypatch.setattr(self.ctrl, "_ws_query", self._ws_stub([entry], devices))
-        result = self.ctrl.discover_ha_metadata(None)
+        result = self.ctrl._parse_ha_metadata(None, [entry], devices, [])
         assert result["nordpool_area"] == "SE3"
 
-    def test_hacs_long_identifier_normalised(self, monkeypatch):
+    def test_hacs_long_identifier_normalised(self):
         """Issue #105: HACS identifier 'nordpool_kwh_se2_sek_2_10_025' → 'SE2'."""
         entry = {"domain": "nordpool", "state": "loaded", "entry_id": "abc"}
         devices = [self._nordpool_device("nordpool_kwh_se2_sek_2_10_025")]
-        monkeypatch.setattr(self.ctrl, "_ws_query", self._ws_stub([entry], devices))
-        result = self.ctrl.discover_ha_metadata(None)
+        result = self.ctrl._parse_ha_metadata(None, [entry], devices, [])
         assert result["nordpool_area"] == "SE2"
 
-    def test_hacs_norwegian_identifier_normalised(self, monkeypatch):
+    def test_hacs_norwegian_identifier_normalised(self):
         """HACS identifier 'nordpool_kwh_no1_nok_3_10_025' → 'NO1' (not 'NO')."""
         entry = {"domain": "nordpool", "state": "loaded", "entry_id": "abc"}
         devices = [self._nordpool_device("nordpool_kwh_no1_nok_3_10_025")]
-        monkeypatch.setattr(self.ctrl, "_ws_query", self._ws_stub([entry], devices))
-        result = self.ctrl.discover_ha_metadata(None)
+        result = self.ctrl._parse_ha_metadata(None, [entry], devices, [])
         assert result["nordpool_area"] == "NO1"
 
-    def test_non_matching_config_entry_ignored(self, monkeypatch):
+    def test_non_matching_config_entry_ignored(self):
         """Devices for a different config entry are not used."""
         entry = {"domain": "nordpool", "state": "loaded", "entry_id": "abc"}
         devices = [self._nordpool_device("SE3", config_entry_id="other")]
-        monkeypatch.setattr(self.ctrl, "_ws_query", self._ws_stub([entry], devices))
-        result = self.ctrl.discover_ha_metadata(None)
+        result = self.ctrl._parse_ha_metadata(None, [entry], devices, [])
         assert result["nordpool_area"] is None
 
-    def test_no_nordpool_devices_returns_none(self, monkeypatch):
+    def test_no_nordpool_devices_returns_none(self):
         """nordpool_area is None when no matching devices exist."""
         entry = {"domain": "nordpool", "state": "loaded", "entry_id": "abc"}
-        monkeypatch.setattr(self.ctrl, "_ws_query", self._ws_stub([entry], []))
-        result = self.ctrl.discover_ha_metadata(None)
+        result = self.ctrl._parse_ha_metadata(None, [entry], [], [])
         assert result["nordpool_area"] is None
 
-    def test_no_nordpool_config_entry_returns_none(self, monkeypatch):
+    def test_no_nordpool_config_entry_returns_none(self):
         """nordpool_area is None when there is no loaded nordpool config entry."""
-        monkeypatch.setattr(self.ctrl, "_ws_query", self._ws_stub([]))
-        result = self.ctrl.discover_ha_metadata(None)
+        result = self.ctrl._parse_ha_metadata(None, [], [], [])
         assert result["nordpool_area"] is None
 
-    def test_unloaded_entry_is_ignored(self, monkeypatch):
+    def test_unloaded_entry_is_ignored(self):
         """Config entries that are not in 'loaded' state are skipped."""
         entry = {"domain": "nordpool", "state": "not_loaded", "entry_id": "abc"}
         devices = [self._nordpool_device("SE3")]
-        monkeypatch.setattr(self.ctrl, "_ws_query", self._ws_stub([entry], devices))
-        result = self.ctrl.discover_ha_metadata(None)
+        result = self.ctrl._parse_ha_metadata(None, [entry], devices, [])
         assert result["nordpool_area"] is None

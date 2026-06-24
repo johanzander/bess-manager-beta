@@ -200,7 +200,7 @@ class TestSerializeHaWsDiscovery:
             [],
             {},
         ]
-        controller.discover_ha_metadata.return_value = {
+        controller.discover_integrations.return_value = {
             "nordpool_area": "SE3",
             "nordpool_config_entry_id": "n1",
         }
@@ -231,7 +231,7 @@ class TestSerializeHaWsDiscovery:
             ],
             {},
         ]
-        controller.discover_ha_metadata.return_value = {}
+        controller.discover_integrations.return_value = {}
         agg = self._make_aggregator(controller)
 
         out = agg._serialize_ha_ws_discovery()
@@ -251,7 +251,7 @@ class TestSerializeHaWsDiscovery:
                 "weather": {"get_forecast": {}},
             },
         ]
-        controller.discover_ha_metadata.return_value = {}
+        controller.discover_integrations.return_value = {}
         agg = self._make_aggregator(controller)
 
         out = agg._serialize_ha_ws_discovery()
@@ -261,3 +261,32 @@ class TestSerializeHaWsDiscovery:
             "read_time_segments",
             "update_time_segment",
         ]
+
+    def test_resolved_section_contains_all_required_keys(self):
+        """debug export 'resolved' section must include all discovery fields.
+
+        This guards against the debug exporter calling a partial discovery
+        method that omits entsoe_found, solcast_found, or currency — which
+        would make it impossible to diagnose provider configuration issues.
+        """
+        controller = MagicMock()
+        controller._ws_query.return_value = [[], [], {}]
+        controller.discover_integrations.return_value = {
+            "entsoe_found": True,
+            "solcast_found": False,
+            "currency": "EUR",
+            "detected_platforms": ["solax_modbus_growatt_min"],
+            "octopus_found": False,
+        }
+        agg = self._make_aggregator(controller)
+
+        out = agg._serialize_ha_ws_discovery()
+
+        required = {
+            "entsoe_found",
+            "solcast_found",
+            "currency",
+            "detected_platforms",
+            "octopus_found",
+        }
+        assert required.issubset(out["resolved"].keys())

@@ -3094,10 +3094,10 @@ async def setup_complete(payload: APISetupCompletePayload):
                 ep["entsoe"] = {"entity": payload.entsoeEntity}
             sections["energy_provider"] = ep
 
-            # Auto-set currency from provider when not explicitly provided
+            # Auto-set currency from provider; always overrides any existing value
             _PROVIDER_CURRENCY = {"octopus": "GBP", "entsoe": "EUR"}
             auto_currency = _PROVIDER_CURRENCY.get(payload.provider or "")
-            if auto_currency and payload.currency is None:
+            if auto_currency:
                 home = sections.get(
                     "home"
                 ) or bess_controller.settings_store.get_section("home")
