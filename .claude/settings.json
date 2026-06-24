@@ -1,19 +1,6 @@
 {
   "permissions": {
-    "allow": [
-      "Read",
-      "Glob",
-      "Grep",
-      "Bash(pytest:*)",
-      "Bash(python3 -m pytest:*)",
-      "Bash(python -m pytest:*)",
-      "Bash(./.venv/bin/pytest:*)",
-      "Bash(./.venv/bin/python -m pytest:*)",
-      "Bash(colima start *)",
-      "Bash(colima start)",
-      "Bash(colima stop *)",
-      "Bash(colima stop)"
-    ],
+    "defaultMode": "auto",
     "deny": [
       "Bash(colima delete *)",
       "Bash(colima delete)"
