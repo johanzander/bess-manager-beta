@@ -1866,7 +1866,9 @@ class BatterySystemManager:
             self._add_timestamps_to_period_data(result, optimization_period)
 
             # Print results table with strategic intents
-            print_optimization_results(result, buy_prices, sell_prices)
+            print_optimization_results(
+                result, buy_prices, sell_prices, self.home_settings.currency
+            )
 
             # Store full day data in result for UI
             result.input_data["full_home_consumption"] = optimization_data[

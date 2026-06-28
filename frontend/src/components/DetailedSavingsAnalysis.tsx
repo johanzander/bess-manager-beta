@@ -355,6 +355,11 @@ export const DetailedSavingsAnalysis: React.FC<DetailedSavingsAnalysisProps> = (
                   <div className="text-xs text-gray-500 dark:text-gray-400">
                     {hour.batterySoeEnd?.display || '0.0'} {hour.batterySoeEnd?.unit || 'kWh'}
                   </div>
+                  {isCurrentPeriod && dashboardData.batterySoc !== undefined && (
+                    <div className="text-xs text-purple-500 dark:text-purple-400 mt-0.5">
+                      Live: {Math.round(dashboardData.batterySoc)} %
+                    </div>
+                  )}
                 </td>
                 <td className="px-3 py-2 whitespace-nowrap text-sm text-gray-900 dark:text-white border border-gray-300 dark:border-gray-600 bg-green-50 dark:bg-green-900/20 text-center">
                   <div className={`font-medium ${
