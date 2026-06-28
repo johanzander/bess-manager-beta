@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
+## [9.9.0b4] - 2026-06-28
+
+### Fixed (beta-only)
+
+- **`spot_multiplier`/`export_spot_multiplier` not applied to price calculations after restart** — Even after the b3 fix, the optimizer still used 1.0 because the values were not wired into `PriceManager` at init or when settings were updated. Both paths are now fixed. (#126)
+- **Currency not auto-set when switching provider via settings PATCH** — Changing the provider in Settings (not just the wizard) now auto-sets EUR for ENTSO-e and GBP for Octopus. (#126)
+- **ENTSO-e price preview used unrealistic spot value** — The "Preview at spot = X" box in the pricing settings now uses 0.10 EUR/kWh instead of 1.00, matching typical Belgian day-ahead prices and giving a meaningful buy/sell preview. (#126)
+
 ## [9.9.0b3] - 2026-06-28
 
 ### Fixed (beta-only)
