@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
+## [9.9.0b2] - 2026-06-28
+
+### Fixed (beta-only)
+
+- **Current-hour battery level cell now shows live sensor reading** — The "Current" row in the Savings table previously showed only the optimizer's planned end-of-period SOC, which could show a large jump from the previous actual row when the forecast diverged from reality. The cell now shows the planned target as the primary value with a small "Live: X%" line from the live Growatt sensor beneath it, matching the pattern used in the inverter battery card. (#126)
+- **Schedule summary log footer showed "SEK" for all currencies** — Log output from the optimization results table now uses the configured currency (e.g. "EUR" for ENTSO-e users). (#126)
+
 ## [9.9.0b1] - 2026-06-27
 
 Syncs beta with all production changes through v9.8.0, and includes the full ENTSO-e/Belpex pricing provider (beta-only, issue #126).
