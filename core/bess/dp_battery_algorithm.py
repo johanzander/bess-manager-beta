@@ -511,13 +511,14 @@ def _build_period_data(
     )
 
 
-def print_optimization_results(results, buy_prices, sell_prices):
+def print_optimization_results(results, buy_prices, sell_prices, currency: str = "SEK"):
     """Log a detailed results table with strategic intents - new format version.
 
     Args:
         results: OptimizationResult object with period_data and economic_summary
         buy_prices: List of buy prices
         sell_prices: List of sell prices
+        currency: Currency code for display (e.g. "SEK", "EUR")
     """
     period_data_list = results.period_data
     economic_results = results.economic_summary
@@ -623,13 +624,13 @@ def print_optimization_results(results, buy_prices, sell_prices):
     # Append summary stats to output
     output.append("\n      Summary:")
     output.append(
-        f"      Grid-only cost:           {economic_results.grid_only_cost:.2f} SEK"
+        f"      Grid-only cost:           {economic_results.grid_only_cost:.2f} {currency}"
     )
     output.append(
-        f"      Optimized cost:           {economic_results.battery_solar_cost:.2f} SEK"
+        f"      Optimized cost:           {economic_results.battery_solar_cost:.2f} {currency}"
     )
     output.append(
-        f"      Total savings:            {economic_results.grid_to_battery_solar_savings:.2f} SEK"
+        f"      Total savings:            {economic_results.grid_to_battery_solar_savings:.2f} {currency}"
     )
     savings_percentage = economic_results.grid_to_battery_solar_savings_pct
     output.append(f"      Savings percentage:         {savings_percentage:.1f} %")
