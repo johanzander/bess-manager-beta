@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
+## [9.9.0b3] - 2026-06-28
+
+### Fixed (beta-only)
+
+- **`spot_multiplier` and `export_spot_multiplier` silently reverted to 1.0 on every restart** — These fields were stored correctly by the setup wizard but missing from the startup settings map (`PRICE_STORE_TO_API`), so the optimizer ignored them after every restart. For Belgian ENTSO-e users with a Luminus Dynamic contract (multiplier 1.0175) this caused the optimizer to underestimate import costs by ~1.75% for the entire uptime after each restart. A schema migration ensures existing configurations are also fixed without re-running the wizard. (#126)
+
 ## [9.9.0b2] - 2026-06-28
 
 ### Fixed (beta-only)

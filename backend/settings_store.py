@@ -360,12 +360,15 @@ class SettingsStore:
             BATTERY_STORAGE_SIZE_KWH,
             DEFAULT_AREA,
             DEFAULT_CURRENCY,
+            EXPORT_SPOT_MULTIPLIER,
             HOME_HOURLY_CONSUMPTION_KWH,
             HOUSE_MAX_FUSE_CURRENT_A,
             HOUSE_VOLTAGE_V,
             MARKUP_RATE,
             SAFETY_MARGIN_FACTOR,
+            SPOT_MULTIPLIER,
             TAX_REDUCTION,
+            USE_ACTUAL_PRICE,
             VAT_MULTIPLIER,
         )
 
@@ -395,6 +398,9 @@ class SettingsStore:
                 "additional_costs": ADDITIONAL_COSTS,
                 "tax_reduction": TAX_REDUCTION,
                 "area": DEFAULT_AREA,
+                "spot_multiplier": SPOT_MULTIPLIER,
+                "export_spot_multiplier": EXPORT_SPOT_MULTIPLIER,
+                "use_actual_price": USE_ACTUAL_PRICE,
             },
             "energy_provider": {
                 "provider": "nordpool_official",
@@ -567,6 +573,27 @@ class SettingsStore:
                     len(shared),
                 )
                 changed = True
+
+        # --- electricity_price: spot_multiplier / export_spot_multiplier / use_actual_price ---
+        # These were stored by the wizard but missing from PRICE_STORE_TO_API, so they
+        # were silently dropped at startup (optimizer used the PriceSettings defaults).
+        # Add defaults for configs written before these fields were included.
+        price = self.data.get("electricity_price")
+        if isinstance(price, dict):
+            from core.bess.settings import (
+                EXPORT_SPOT_MULTIPLIER,
+                SPOT_MULTIPLIER,
+                USE_ACTUAL_PRICE,
+            )
+
+            for key, default in (
+                ("spot_multiplier", SPOT_MULTIPLIER),
+                ("export_spot_multiplier", EXPORT_SPOT_MULTIPLIER),
+                ("use_actual_price", USE_ACTUAL_PRICE),
+            ):
+                if key not in price:
+                    price[key] = default
+                    changed = True
 
         # --- demo_mode section (added v9.5) ---
         if "demo_mode" not in self.data:

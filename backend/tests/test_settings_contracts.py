@@ -77,6 +77,9 @@ def _valid_options() -> dict:
             "vat_multiplier": 1.25,
             "additional_costs": 0.77,
             "tax_reduction": 0.2,
+            "spot_multiplier": 1.0175,
+            "export_spot_multiplier": 1.018,
+            "use_actual_price": False,
         },
     }
 
@@ -257,6 +260,81 @@ class TestBatteryModelAttrsConsistency:
             f"Extra in api.py:     {_BATTERY_MODEL_ATTRS - expected}\n"
             f"Missing from api.py: {expected - _BATTERY_MODEL_ATTRS}"
         )
+
+
+# ---------------------------------------------------------------------------
+# 4b. PRICE_STORE_TO_API must cover all storable PriceSettings fields
+#
+# "Storable" means persisted by the wizard — excludes min_profit which is
+# an in-memory-only tuning parameter not exposed in the UI.
+#
+# If this test fails after adding a field to PriceSettings:
+#   1. Add it to PRICE_STORE_TO_API in api_conversion.py.
+#   2. Add it to _bootstrap_defaults() in settings_store.py.
+#   3. Add a migration block in _migrate_schema() for existing configs.
+# ---------------------------------------------------------------------------
+
+# Fields in PriceSettings that are intentionally NOT persisted to the store.
+_PRICE_NON_STORED = frozenset({"min_profit"})
+
+
+class TestPriceModelAttrsConsistency:
+    """PRICE_STORE_TO_API must cover every storable PriceSettings field.
+
+    This is the price-settings equivalent of TestBatteryModelAttrsConsistency.
+    It prevents the bug where a new PriceSettings field (e.g. spot_multiplier)
+    is added and stored by the wizard but forgotten in the startup mapping,
+    causing it to be silently reset to the dataclass default on every restart.
+    """
+
+    def test_price_store_to_api_covers_all_stored_fields(self):
+        from core.bess.settings import PriceSettings
+
+        all_fields = frozenset(
+            f.name for f in dataclasses.fields(PriceSettings) if f.init
+        )
+        storable = all_fields - _PRICE_NON_STORED
+        mapped = frozenset(PRICE_STORE_TO_API.keys())
+
+        assert mapped == storable, (
+            "PRICE_STORE_TO_API in api_conversion.py doesn't match PriceSettings.\n"
+            "Fields in PriceSettings but missing from PRICE_STORE_TO_API "
+            "(will silently revert to default on every restart):\n"
+            f"  {storable - mapped}\n"
+            "Fields in PRICE_STORE_TO_API but not in PriceSettings "
+            "(stale mapping, will raise AttributeError at runtime):\n"
+            f"  {mapped - storable}"
+        )
+
+    def test_spot_multiplier_survives_build_system_settings(self):
+        """spot_multiplier must reach the optimizer after startup, not revert to 1.0."""
+        from api_conversion import build_system_settings
+
+        options = _valid_options()
+        options["electricity_price"]["spot_multiplier"] = 1.0175
+        result = build_system_settings(options)
+        assert result["price"]["spotMultiplier"] == 1.0175, (
+            "spot_multiplier not forwarded by build_system_settings — "
+            "it will silently revert to 1.0 on every restart"
+        )
+
+    def test_export_spot_multiplier_survives_build_system_settings(self):
+        """export_spot_multiplier must reach the optimizer after startup."""
+        from api_conversion import build_system_settings
+
+        options = _valid_options()
+        options["electricity_price"]["export_spot_multiplier"] = 1.018
+        result = build_system_settings(options)
+        assert result["price"]["exportSpotMultiplier"] == 1.018
+
+    def test_use_actual_price_survives_build_system_settings(self):
+        """use_actual_price must reach the optimizer after startup."""
+        from api_conversion import build_system_settings
+
+        options = _valid_options()
+        options["electricity_price"]["use_actual_price"] = True
+        result = build_system_settings(options)
+        assert result["price"]["useActualPrice"] is True
 
 
 # ---------------------------------------------------------------------------

@@ -48,6 +48,9 @@ PRICE_STORE_TO_API: dict[str, str] = {
     "vat_multiplier": "vatMultiplier",
     "additional_costs": "additionalCosts",
     "tax_reduction": "taxReduction",
+    "spot_multiplier": "spotMultiplier",
+    "export_spot_multiplier": "exportSpotMultiplier",
+    "use_actual_price": "useActualPrice",
 }
 
 # Legacy inverter_type values ("MIN"/"SPH") → canonical inverter.platform.
