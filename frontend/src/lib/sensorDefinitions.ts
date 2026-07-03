@@ -4,6 +4,8 @@ export interface SensorDef {
   key: string;
   label: string;
   required: boolean;
+  helpText?: string;
+  exampleTemplate?: string;
 }
 
 export interface SensorGroup {
@@ -435,7 +437,23 @@ export const INTEGRATIONS: IntegrationDef[] = [
         sensors: [
           { key: 'pv_power', label: 'PV Power', required: false },
           { key: 'local_load_power', label: 'Household Load Power', required: false },
-          { key: 'import_power', label: 'Grid Power Net', required: false },
+          {
+            key: 'import_power',
+            label: 'Grid Power Net',
+            required: false,
+            helpText: 'Net power at the grid connection point. Positive values mean importing from the grid; negative values mean exporting to the grid. Unit must be W. This is not household load and not PV production. If your inverter only exposes separate import/export sensors, create a template sensor with import minus export.',
+            exampleTemplate: `template:
+  - sensor:
+      - name: "Grid Power Net"
+        unique_id: grid_power_net
+        unit_of_measurement: "W"
+        device_class: power
+        state_class: measurement
+        state: >
+          {% set import = states('sensor.grid_import_power') | float(0) %}
+          {% set export = states('sensor.grid_export_power') | float(0) %}
+          {{ (import - export) | round(0) }}`,
+          },
           { key: 'export_power', label: 'Grid Export Power', required: false },
         ],
       },

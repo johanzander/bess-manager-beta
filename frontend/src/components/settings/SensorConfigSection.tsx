@@ -115,6 +115,30 @@ function sensorIcon(status: HealthStatus | null, hasValue: boolean) {
   return <CheckCircle className="h-3.5 w-3.5 text-green-500 flex-shrink-0" />;
 }
 
+function SensorHelp({ sensor }: { sensor: { helpText?: string; exampleTemplate?: string } }) {
+  if (!sensor.helpText && !sensor.exampleTemplate) return null;
+
+  return (
+    <div className="sm:ml-[13.5rem] space-y-1.5">
+      {sensor.helpText && (
+        <p className="text-[11px] leading-4 text-gray-500 dark:text-gray-400">
+          {sensor.helpText}
+        </p>
+      )}
+      {sensor.exampleTemplate && (
+        <details className="rounded-md border border-gray-200 dark:border-gray-600 bg-white/80 dark:bg-gray-800/80 overflow-hidden">
+          <summary className="cursor-pointer select-none px-2 py-1.5 text-[11px] font-medium text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700/60">
+            Example Home Assistant template
+          </summary>
+          <pre className="overflow-x-auto border-t border-gray-100 dark:border-gray-700 px-2 py-2 text-[11px] leading-4 text-gray-700 dark:text-gray-200">
+            <code>{sensor.exampleTemplate}</code>
+          </pre>
+        </details>
+      )}
+    </div>
+  );
+}
+
 // Derive a status dot from discovery data (wizard mode)
 function discoveryDot(intg: IntegrationDef, found: boolean, counts: ReturnType<typeof integrationSensorCounts>) {
   if (counts.total === 0) return null;
@@ -414,7 +438,7 @@ export function SensorConfigSection({ sensors, onChange, inverterForm, onInverte
                       return (
                         <div
                           key={s.key}
-                          className={`flex flex-col sm:flex-row sm:items-center gap-1 p-2 rounded-lg ${
+                          className={`space-y-2 p-2 rounded-lg ${
                             isMissing && s.required
                               ? 'bg-orange-50 dark:bg-orange-900/10'
                               : isMissing
@@ -422,26 +446,29 @@ export function SensorConfigSection({ sensors, onChange, inverterForm, onInverte
                                 : 'bg-gray-50 dark:bg-gray-700/50'
                           }`}
                         >
-                          <div className="flex items-center gap-1.5 sm:w-52 flex-shrink-0">
-                            {sensorIcon(wizardMode ? null : status, !isMissing)}
-                            <span className="text-xs font-medium text-gray-600 dark:text-gray-300">
-                              {s.label}
-                            </span>
-                            {s.required && isMissing && (
-                              <span className="text-[9px] text-orange-500 dark:text-orange-400 font-medium">*</span>
-                            )}
+                          <div className="flex flex-col sm:flex-row sm:items-center gap-1">
+                            <div className="flex items-center gap-1.5 sm:w-52 flex-shrink-0">
+                              {sensorIcon(wizardMode ? null : status, !isMissing)}
+                              <span className="text-xs font-medium text-gray-600 dark:text-gray-300">
+                                {s.label}
+                              </span>
+                              {s.required && isMissing && (
+                                <span className="text-[9px] text-orange-500 dark:text-orange-400 font-medium">*</span>
+                              )}
+                            </div>
+                            <input
+                              type="text"
+                              value={val}
+                              placeholder={isMissing ? 'Not detected — enter entity ID' : ''}
+                              onChange={e => handleSensorChange(intg.id, s.key, e.target.value)}
+                              className={`flex-1 text-xs px-2 py-1 rounded border font-mono ${
+                                isMissing && s.required
+                                  ? 'border-orange-300 dark:border-orange-600 bg-white dark:bg-gray-800 text-orange-700 dark:text-orange-300 placeholder-orange-400'
+                                  : 'border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-200'
+                              } focus:outline-none focus:ring-1 focus:ring-blue-400`}
+                            />
                           </div>
-                          <input
-                            type="text"
-                            value={val}
-                            placeholder={isMissing ? 'Not detected — enter entity ID' : ''}
-                            onChange={e => handleSensorChange(intg.id, s.key, e.target.value)}
-                            className={`flex-1 text-xs px-2 py-1 rounded border font-mono ${
-                              isMissing && s.required
-                                ? 'border-orange-300 dark:border-orange-600 bg-white dark:bg-gray-800 text-orange-700 dark:text-orange-300 placeholder-orange-400'
-                                : 'border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-200'
-                            } focus:outline-none focus:ring-1 focus:ring-blue-400`}
-                          />
+                          <SensorHelp sensor={s} />
                         </div>
                       );
                     })}
@@ -516,7 +543,7 @@ export function SensorConfigSection({ sensors, onChange, inverterForm, onInverte
                         return (
                           <div
                             key={s.key}
-                            className={`flex flex-col sm:flex-row sm:items-center gap-1 p-2 rounded-lg ${
+                            className={`space-y-2 p-2 rounded-lg ${
                               isMissing && s.required
                                 ? 'bg-orange-50 dark:bg-orange-900/10'
                                 : isMissing
@@ -524,26 +551,29 @@ export function SensorConfigSection({ sensors, onChange, inverterForm, onInverte
                                   : 'bg-gray-50 dark:bg-gray-700/50'
                             }`}
                           >
-                            <div className="flex items-center gap-1.5 sm:w-52 flex-shrink-0">
-                              {sensorIcon(wizardMode ? null : status, !isMissing)}
-                              <span className="text-xs font-medium text-gray-600 dark:text-gray-300">
-                                {s.label}
-                              </span>
-                              {s.required && isMissing && (
-                                <span className="text-[9px] text-orange-500 dark:text-orange-400 font-medium">*</span>
-                              )}
+                            <div className="flex flex-col sm:flex-row sm:items-center gap-1">
+                              <div className="flex items-center gap-1.5 sm:w-52 flex-shrink-0">
+                                {sensorIcon(wizardMode ? null : status, !isMissing)}
+                                <span className="text-xs font-medium text-gray-600 dark:text-gray-300">
+                                  {s.label}
+                                </span>
+                                {s.required && isMissing && (
+                                  <span className="text-[9px] text-orange-500 dark:text-orange-400 font-medium">*</span>
+                                )}
+                              </div>
+                              <input
+                                type="text"
+                                value={val}
+                                placeholder={isMissing ? 'Not detected — enter entity ID' : ''}
+                                onChange={e => handleSensorChange(intg.id, s.key, e.target.value)}
+                                className={`flex-1 text-xs px-2 py-1 rounded border font-mono ${
+                                  isMissing && s.required
+                                    ? 'border-orange-300 dark:border-orange-600 bg-white dark:bg-gray-800 text-orange-700 dark:text-orange-300 placeholder-orange-400'
+                                    : 'border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-200'
+                                } focus:outline-none focus:ring-1 focus:ring-blue-400`}
+                              />
                             </div>
-                            <input
-                              type="text"
-                              value={val}
-                              placeholder={isMissing ? 'Not detected — enter entity ID' : ''}
-                              onChange={e => handleSensorChange(intg.id, s.key, e.target.value)}
-                              className={`flex-1 text-xs px-2 py-1 rounded border font-mono ${
-                                isMissing && s.required
-                                  ? 'border-orange-300 dark:border-orange-600 bg-white dark:bg-gray-800 text-orange-700 dark:text-orange-300 placeholder-orange-400'
-                                  : 'border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-200'
-                              } focus:outline-none focus:ring-1 focus:ring-blue-400`}
-                            />
+                            <SensorHelp sensor={s} />
                           </div>
                         );
                       })}
