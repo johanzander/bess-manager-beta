@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
-## [9.10.0b1] - 2026-07-03
+## [9.9.0b5] - 2026-07-03
 
 ### Added
 
@@ -56,7 +56,7 @@ Syncs beta with all production changes through v9.8.0, and includes the full ENT
 - **Currency not auto-set when switching to ENTSO-e** — Setup wizard now always applies EUR when ENTSO-e is selected, overwriting any prior currency value. (#126)
 - **Debug export missing ENTSO-e discovery fields** — Debug exporter now captures ENTSO-e discovery fields (`entsoe_found`, `entsoe_entity`) in the "Resolved by BESS" section. (#126)
 
-**Note (2026-07-03):** these four 9.9.0bX releases predate the `9.10.0b1` history reset (beta/main was rebuilt from a clean copy of production `main`, since all of beta's non-experimental work had already been merged upstream). The `spot_multiplier` feature above was re-ported into `9.10.0b1`; the Solcast entity-registry fix was found to be dead code (never wired to its call site) in both beta and this history and was not carried forward as-is — see follow-up issue.
+**Note (2026-07-03):** these four 9.9.0b1-b4 releases predate the `9.9.0b5` history reset (beta/main was rebuilt from a clean copy of production `main`, since all of beta's non-experimental work had already been merged upstream). The `spot_multiplier` feature above was re-ported into `9.9.0b5`; the Solcast entity-registry fix was found to be dead code (never wired to its call site) in both beta and this history and was not carried forward as-is — see follow-up issue.
 
 ## [9.8.1] - 2026-06-28
 
