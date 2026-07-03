@@ -290,6 +290,60 @@ def test_grid_charging_charges_at_max_rate_not_fractional():
     )
 
 
+def test_grid_charging_action_reports_achieved_throughput_not_tied_power():
+    """Regression for #203: decision.battery_action must reflect the achieved
+    charge throughput, not the arbitrary tested `power` that won the DP's
+    tie-break among physically-identical positive STORE levels.
+
+    _state_transition's STORE physics are binary (see
+    test_grid_charging_charges_at_max_rate_not_fractional above): any positive
+    power charges at the same max rate_throughput. The real DP's power_levels
+    are iterated ascending with a strict `>` update, so the smallest positive
+    level (POWER_STEP_KW = 0.2 kW) always wins as best_action — but that tiny
+    tested value must not leak into decision.battery_action, since it drives
+    the inverter's charge_rate register via get_period_settings().
+
+    Scenario mirrors test_grid_charging_charges_at_max_rate_not_fractional:
+    no solar, power=0.2 kW (the smallest positive power_level). Expected
+    battery_action = 2.5 kWh (max-rate achieved charge), not 0.2*0.25=0.05 kWh.
+    """
+    from core.bess.dp_battery_algorithm import _build_period_data, _state_transition
+
+    bs = make_battery_settings(
+        total_capacity=20.0,
+        min_soc=0.0,
+        max_soc=100.0,
+        max_charge_power_kw=10.0,
+        efficiency_charge=1.0,
+    )
+    soe = 2.0
+    tied_power = 0.2  # smallest positive power_level — always wins the DP tie-break
+    next_soe = _state_transition(
+        soe, tied_power, bs, DT, solar_production=0.0, home_consumption=0.0
+    )
+    pd = _build_period_data(
+        power=tied_power,
+        soe=soe,
+        next_soe=next_soe,
+        period=0,
+        home_consumption=0.0,
+        battery_settings=bs,
+        dt=DT,
+        buy_price=PRICES_BUY,
+        sell_price=PRICES_SELL,
+        solar_production=0.0,
+        new_cost_basis=bs.cycle_cost_per_kwh,
+        currency="SEK",
+    )
+    expected_action = min(bs.max_charge_power_kw * DT, bs.max_soe_kwh - soe)  # 2.5 kWh
+    assert round(pd.decision.battery_action, 4) == round(expected_action, 4), (
+        f"Expected battery_action={expected_action} (achieved max-rate charge) "
+        f"but got {pd.decision.battery_action:.4f} "
+        f"(leaked tested power={tied_power}*{DT}={tied_power * DT})"
+    )
+    assert pd.decision.strategic_intent == "GRID_CHARGING"
+
+
 def test_small_solar_surplus_at_idle_classifies_as_solar_export():
     """A power-0 period with solar surplus classifies as SOLAR_EXPORT (load_first).
     grid_first is only for active battery discharge — idle periods must use
@@ -330,3 +384,123 @@ def test_battery_export_active_discharge_still_grid_first():
     assert cmd.battery_mode == "grid_first"
     assert cmd.discharge_rate_pct == 50
     assert cmd.grid_charge is False
+
+
+# ---------------------------------------------------------------------------
+# Issue #204: anti-cycling discharge gate over-values stored energy when
+# solar already covers all home load (no grid purchase to displace)
+# ---------------------------------------------------------------------------
+
+
+def test_discharge_blocked_when_solar_covers_load_and_action_matches_bug_report():
+    """Reproduces issue #204 period 63 exactly: solar covers all home load,
+    battery full, buy_price > sell_price. avoid_purchase_value wrongly lets a
+    marginal 0.1 kWh discharge through the -inf anti-cycling gate because
+    there is no grid purchase to actually avoid this period."""
+    bs = make_battery_settings()
+    buy_price = [1.0568]
+    sell_price = [0.46126]
+    cost_basis = 0.6219
+    soe = bs.max_soe_kwh  # battery full
+    power = -0.4  # discharge power that yields the reported 0.1 kWh action
+
+    next_soe = _state_transition(
+        soe, power, bs, DT, solar_production=0.893, home_consumption=0.155
+    )
+
+    reward, _ = _compute_reward(
+        power=power,
+        soe=soe,
+        next_soe=next_soe,
+        period=0,
+        home_consumption=0.155,
+        battery_settings=bs,
+        dt=DT,
+        buy_price=buy_price,
+        sell_price=sell_price,
+        solar_production=0.893,
+        cost_basis=cost_basis,
+    )
+    assert reward == float("-inf"), (
+        f"Expected discharge blocked (no grid purchase to displace, "
+        f"export_value=0.438 < cost_basis=0.622) but got reward={reward}"
+    )
+
+
+def test_discharge_blocked_at_smaller_action_size_below_capacity_threshold():
+    """Same solar-covers-load scenario as above but with a smaller discharge
+    action (0.05 kWh) whose capacity_after_discharge falls below SOE_STEP_KWH.
+    The fix must gate on excess_solar alone, not on capacity_after_discharge —
+    otherwise this smaller action slips through even after fixing the
+    reported 0.1 kWh case."""
+    bs = make_battery_settings()
+    buy_price = [1.0568]
+    sell_price = [0.46126]
+    cost_basis = 0.6219
+    soe = bs.max_soe_kwh
+    power = -0.2  # half the reported action size
+
+    next_soe = _state_transition(
+        soe, power, bs, DT, solar_production=0.893, home_consumption=0.155
+    )
+    capacity_after_discharge = bs.max_soe_kwh - next_soe
+    assert (
+        capacity_after_discharge < 0.1
+    )  # confirms this is the smaller-action edge case
+
+    reward, _ = _compute_reward(
+        power=power,
+        soe=soe,
+        next_soe=next_soe,
+        period=0,
+        home_consumption=0.155,
+        battery_settings=bs,
+        dt=DT,
+        buy_price=buy_price,
+        sell_price=sell_price,
+        solar_production=0.893,
+        cost_basis=cost_basis,
+    )
+    assert reward == float(
+        "-inf"
+    ), f"Expected discharge blocked even at smaller action size but got reward={reward}"
+
+
+def test_discharge_not_blocked_when_solar_does_not_cover_load():
+    """Regression guard: when solar does NOT cover home load, there IS a real
+    grid purchase to avoid, so avoid_purchase_value must remain in the max()
+    and a genuinely profitable discharge must not be blocked."""
+    bs = make_battery_settings()
+    buy_price = [1.0568]
+    sell_price = [0.46126]
+    cost_basis = 0.5  # below avoid_purchase_value, discharge is profitable
+    soe = bs.max_soe_kwh
+    power = -0.4
+    solar_production = 0.1
+    home_consumption = 1.0  # exceeds solar, no excess solar
+
+    next_soe = _state_transition(
+        soe,
+        power,
+        bs,
+        DT,
+        solar_production=solar_production,
+        home_consumption=home_consumption,
+    )
+
+    reward, _ = _compute_reward(
+        power=power,
+        soe=soe,
+        next_soe=next_soe,
+        period=0,
+        home_consumption=home_consumption,
+        battery_settings=bs,
+        dt=DT,
+        buy_price=buy_price,
+        sell_price=sell_price,
+        solar_production=solar_production,
+        cost_basis=cost_basis,
+    )
+    assert reward != float(
+        "-inf"
+    ), "Expected discharge NOT blocked (real grid purchase avoided) but got -inf"

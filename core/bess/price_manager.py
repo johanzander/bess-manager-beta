@@ -437,6 +437,18 @@ class PriceManager:
         spot_multiplier: float = 1.0,
         export_spot_multiplier: float = 1.0,
     ) -> None:
+        """Initialize the price manager.
+
+        Args:
+            price_source: Source of raw Nordpool prices
+            markup_rate: Markup rate applied to buy prices
+            vat_multiplier: VAT multiplier applied to buy prices
+            additional_costs: Additional fixed costs added to buy prices
+            tax_reduction: Tax reduction applied to sell prices
+            area: Price area code (e.g. "SE4", "NO1", "DK1")
+            spot_multiplier: Multiplicative factor on spot buy price (1.0 = no adjustment)
+            export_spot_multiplier: Multiplicative factor on spot sell price
+        """
         self.price_source = price_source
         self.markup_rate = markup_rate
         self.vat_multiplier = vat_multiplier
@@ -467,12 +479,28 @@ class PriceManager:
         self._tomorrow_date = None
 
     def _calculate_buy_price(self, base_price: float) -> float:
+        """Calculate retail buy price from Nordpool base price.
+
+        Args:
+            base_price: Raw Nordpool price (VAT-exclusive)
+
+        Returns:
+            Calculated retail price
+        """
         result = (
             base_price * self.spot_multiplier + self.markup_rate
         ) * self.vat_multiplier
         return result + self.additional_costs
 
     def _calculate_sell_price(self, base_price: float) -> float:
+        """Calculate sell-back price from Nordpool base price.
+
+        Args:
+            base_price: Raw Nordpool price (VAT-exclusive)
+
+        Returns:
+            Calculated sell-back price
+        """
         return base_price * self.export_spot_multiplier + self.tax_reduction
 
     def get_price_data(self, target_date: date | None = None) -> list:

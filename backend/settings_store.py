@@ -607,6 +607,27 @@ class SettingsStore:
                     price[key] = default
                     changed = True
 
+        # --- electricity_price: spot_multiplier / export_spot_multiplier / use_actual_price ---
+        # These were stored by the wizard but missing from PRICE_STORE_TO_API, so they
+        # were silently dropped at startup (optimizer used the PriceSettings defaults).
+        # Add defaults for configs written before these fields were included.
+        price = self.data.get("electricity_price")
+        if isinstance(price, dict):
+            from core.bess.settings import (
+                EXPORT_SPOT_MULTIPLIER,
+                SPOT_MULTIPLIER,
+                USE_ACTUAL_PRICE,
+            )
+
+            for key, default in (
+                ("spot_multiplier", SPOT_MULTIPLIER),
+                ("export_spot_multiplier", EXPORT_SPOT_MULTIPLIER),
+                ("use_actual_price", USE_ACTUAL_PRICE),
+            ):
+                if key not in price:
+                    price[key] = default
+                    changed = True
+
         # --- demo_mode section (added v9.5) ---
         if "demo_mode" not in self.data:
             self.data["demo_mode"] = {"enabled": False}

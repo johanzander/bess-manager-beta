@@ -6,6 +6,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
+## [9.9.0b5] - 2026-07-03
+
+### Added
+
+- **ENTSO-e / Belpex price provider** — New `entsoe` energy provider reads day-ahead spot prices from the [ENTSO-e Transparency Platform](https://github.com/JaccoR/hass-entso-e) HA integration via the average-price sensor's `prices_today` / `prices_tomorrow` attributes. Supports both hourly (PT60M) and quarterly (PT15M) data, auto-detected by the setup wizard. Prices are treated as VAT-exclusive spot prices. Experimental — not yet real-world validated. (#126)
+- **(beta-only) Multiplicative spot-price adjustment** — `spot_multiplier` / `export_spot_multiplier` settings support contracts that scale the raw spot price rather than only adding a fixed markup (e.g. Belgian Luminus Dynamic: 1.0175× import, 1.018× export). The setup wizard now also pre-fills provider-aware pricing defaults (VAT, markup, multipliers) based on the auto-detected provider. Not yet ported to the production release. (#126)
+
+### Fixed
+
+- **`spot_multiplier` and `export_spot_multiplier` silently reverted to 1.0 on every restart** — These fields were stored correctly by the setup wizard but missing from the startup settings map (`PRICE_STORE_TO_API`), so the optimizer ignored them after every restart. For Belgian ENTSO-e users with a Luminus Dynamic contract (multiplier 1.0175) this caused the optimizer to underestimate import costs by ~1.75% for the entire uptime after each restart. A schema migration ensures existing configurations are also fixed without re-running the wizard. (#126)
+- **Anti-cycling discharge gate no longer over-values stored energy during solar surplus** — When solar already covers all home load for a period, `_compute_reward`'s discharge profitability check no longer credits the discharge with `avoid_purchase_value` (there is no grid purchase to displace when solar covers the load). This closed a leak that let marginal, unprofitable ~0.1 kWh `BATTERY_EXPORT` discharges slip past the `-inf` anti-cycling floor in solar-surplus periods with a full battery. (#204)
+
+## [9.9.0b4] - 2026-06-28
+
+### Fixed (beta-only)
+
+- **`spot_multiplier`/`export_spot_multiplier` not applied to price calculations after restart** — Even after the b3 fix, the optimizer still used 1.0 because the values were not wired into `PriceManager` at init or when settings were updated. Both paths are now fixed. (#126)
+- **Currency not auto-set when switching provider via settings PATCH** — Changing the provider in Settings (not just the wizard) now auto-sets EUR for ENTSO-e and GBP for Octopus. (#126)
+- **ENTSO-e price preview used unrealistic spot value** — The "Preview at spot = X" box in the pricing settings now uses 0.10 EUR/kWh instead of 1.00, matching typical Belgian day-ahead prices and giving a meaningful buy/sell preview. (#126)
+
 ## [9.9.0b3] - 2026-06-28
 
 ### Fixed (beta-only)
@@ -35,6 +55,14 @@ Syncs beta with all production changes through v9.8.0, and includes the full ENT
 - **Solcast detection failed with non-English entity names** — Solcast sensors now matched via entity registry `unique_id` instead of entity_id substring, fixing detection for translated HA installations. (#126)
 - **Currency not auto-set when switching to ENTSO-e** — Setup wizard now always applies EUR when ENTSO-e is selected, overwriting any prior currency value. (#126)
 - **Debug export missing ENTSO-e discovery fields** — Debug exporter now captures ENTSO-e discovery fields (`entsoe_found`, `entsoe_entity`) in the "Resolved by BESS" section. (#126)
+
+**Note (2026-07-03):** these four 9.9.0b1-b4 releases predate the `9.9.0b5` history reset (beta/main was rebuilt from a clean copy of production `main`, since all of beta's non-experimental work had already been merged upstream). The `spot_multiplier` feature above was re-ported into `9.9.0b5`; the Solcast entity-registry fix was found to be dead code (never wired to its call site) in both beta and this history and was not carried forward as-is — see follow-up issue.
+
+## [9.8.1] - 2026-06-28
+
+### Changed
+
+- **Debug export now leads with a "Key Findings" section** — the debug bundle opens with an auto-generated digest that surfaces cross-run schedule disagreements (a slot scheduled differently across re-optimization runs) and a deduplicated rollup of today's log anomalies (network/connectivity, data gaps, restarts, runtime errors), grouped by category and source. Raw logs and the full schedule JSON are moved to the bottom, and the health check is captioned as a point-in-time snapshot so its "OK" is not mistaken for "nothing went wrong today." The in-app AI chat uses the same digest instead of the raw log dump. This makes root-causing optimizer decisions and runtime failures much faster. (#198)
 
 ## [9.8.0] - 2026-06-27
 

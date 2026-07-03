@@ -267,11 +267,16 @@ def _compute_reward(
     - Grid costs applied to energy throughput (what you draw from grid)
     - Cost basis includes BOTH grid costs AND cycle costs for profitability analysis
 
-    PROFITABILITY CHECK:
-    - For any discharge, calculate the value of the discharged energy
-    - Value = max(avoiding grid purchases, grid export revenue)
-    - Discharge only profitable if this value > cost_basis
-    - Must account for discharge efficiency losses
+    PROFITABILITY CHECK (opportunity-cost floor):
+    - A discharge is worthwhile only if its value beats the opportunity cost of
+      the stored kWh — not its sunk cost basis and not zero.
+    - Value = max(avoided grid purchase, grid export revenue), after discharge
+      efficiency.
+    - The effective floor is raised to sell_price whenever upcoming solar will
+      replenish the discharged capacity (replenishment): the kWh could be exported
+      later, so sell_price is its true replacement cost. Since
+      sell_price * efficiency_discharge < sell_price, marginal round-trip and
+      refill trades are correctly blocked.
 
     Example for stored energy costing 2.61/kWh:
     - If buy_price = 2.58, sell_price = 1.81
@@ -356,7 +361,16 @@ def _compute_reward(
         # Profitability check: only discharge if value exceeds cost basis
         avoid_purchase_value = current_buy_price * battery_settings.efficiency_discharge
         export_value = current_sell_price * battery_settings.efficiency_discharge
-        effective_value_per_kwh_stored = max(avoid_purchase_value, export_value)
+
+        # If solar already covers all home load this period, there is no grid
+        # purchase for the discharge to displace — its only realizable value is
+        # the export price. Including avoid_purchase_value here would credit the
+        # discharge for a purchase that was never going to happen.
+        excess_solar = max(0.0, solar_production - home_consumption)
+        if excess_solar > POWER_TOLERANCE_KW:
+            effective_value_per_kwh_stored = export_value
+        else:
+            effective_value_per_kwh_stored = max(avoid_purchase_value, export_value)
 
         # Anti-cycling: use sell_price as cost basis floor to prevent wasteful
         # charge/discharge cycling.  Stored energy has an opportunity cost —
@@ -377,7 +391,6 @@ def _compute_reward(
         if current_sell_price > current_buy_price:
             effective_cost_basis = max(effective_cost_basis, current_sell_price)
         else:
-            excess_solar = max(0.0, solar_production - home_consumption)
             capacity_after_discharge = battery_settings.max_soe_kwh - next_soe
             if (
                 excess_solar > POWER_TOLERANCE_KW
@@ -443,13 +456,19 @@ def _build_period_data(
         grid_to_battery = remaining_rate  # solar fills first, grid tops up the rest
         battery_charged = solar_to_battery + grid_to_battery
         battery_discharged = 0.0
+        # STORE physics are binary (any positive power charges at rate_throughput),
+        # so the DP's tie-break can report an arbitrary small `power`. Use the
+        # achieved throughput instead — see #203.
+        battery_action_kwh = battery_charged
     elif power < -POWER_TOLERANCE_KW:  # Active discharging
         battery_charged = 0.0
         battery_discharged = abs(power) * dt
+        battery_action_kwh = power * dt
     else:  # IDLE — EXPORT disposition: battery holds, surplus exported
         battery_charged, battery_discharged = _idle_battery_flows(
             soe, next_soe, battery_settings
         )
+        battery_action_kwh = power * dt
 
     energy_balance = (
         solar_production + battery_discharged - home_consumption - battery_charged
@@ -478,6 +497,7 @@ def _build_period_data(
 
     decision_data = create_decision_data(
         power=power,
+        battery_action_kwh=battery_action_kwh,
         energy_data=energy_data,
         hour=period,
         cost_basis=new_cost_basis,
@@ -487,7 +507,6 @@ def _build_period_data(
         battery_wear_cost=battery_wear_cost,
         buy_price=current_buy_price,
         sell_price=current_sell_price,
-        dt=dt,
         currency=currency,
     )
 
