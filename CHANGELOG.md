@@ -6,16 +6,73 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
-### Added
+## [9.9.0b6] - 2026-07-04
 
-- **ENTSO-e / Belpex price provider** — New `entsoe` energy provider reads day-ahead spot prices from the [ENTSO-e Transparency Platform](https://github.com/JaccoR/hass-entso-e) HA integration via the average-price sensor's `prices_today` / `prices_tomorrow` attributes. Supports both hourly (PT60M) and quarterly (PT15M) data, auto-detected by the setup wizard. Prices are treated as VAT-exclusive spot prices. Experimental — not yet real-world validated. ([#208](https://github.com/johanzander/bess-manager/pull/208))
+Syncs beta with production main through v9.8.1 plus three additional merged PRs.
+
+### Changed
+
+- **Multiplicative spot-price adjustment now uses main's audited implementation** — Beta's standalone `spot_multiplier` / `export_spot_multiplier` port (9.9.0b1–b5) is replaced by the version ported to production main ([#227](https://github.com/johanzander/bess-manager/pull/227)), which folds in additional fixes found during code review: the wizard's provider-switch handler and re-scan-on-mount path no longer clobber a saved custom multiplier with the generic default, and `setup_complete()`'s live-update path now applies both fields immediately instead of requiring a restart. Behavior for Belgian/ENTSO-e users is unchanged; this is no longer beta-only.
 
 ### Fixed
 
 - **Anti-cycling discharge gate no longer over-values stored energy during solar surplus** — When solar already covers all home load for a period, `_compute_reward`'s discharge profitability check no longer credits the discharge with `avoid_purchase_value` (there is no grid purchase to displace when solar covers the load). This closed a leak that let marginal, unprofitable ~0.1 kWh `BATTERY_EXPORT` discharges slip past the `-inf` anti-cycling floor in solar-surplus periods with a full battery. ([#209](https://github.com/johanzander/bess-manager/pull/209))
 - **`GRID_CHARGING` throttled to ~1% of the planned rate** — The DP's ascending-order tie-break always kept the smallest positive tested power level (0.2 kW) as the reported action for the STORE branch, so `decision.battery_action` reported that instead of the throughput actually achieved. That leaked value drove the inverter's charge-rate formula, silently throttling grid charging to ~1% of the intended rate since [#191](https://github.com/johanzander/bess-manager/pull/191). Fixed by computing `battery_action_kwh` from the achieved throughput for the STORE branch. ([#207](https://github.com/johanzander/bess-manager/pull/207))
 - **`LOAD_SUPPORT` discharge rate not reaching the inverter on Solax Modbus** — The Solax Modbus / local-Modbus Growatt controller withheld the hardware discharge-rate write for every intent mapped to `load_first` mode (`IDLE`, `SOLAR_STORAGE`, `SOLAR_EXPORT`, `LOAD_SUPPORT`), but only `LOAD_SUPPORT` computes a real non-zero rate — the others correctly resolve to 0. The write is now withheld only when the rate is genuinely zero, not for every `load_first`-mapped intent. ([#211](https://github.com/johanzander/bess-manager/pull/211))
-- **Stale health-check banner and InfluxDB placeholder-config log spam** — The dashboard health banner only refreshed at startup, after a settings save, or after the setup wizard, so a sensor blip at exactly one of those moments left it stuck showing an error indefinitely. Added a 5-minute background recheck and a manual "Recheck now" button. Also fixed periodic sensor collection attempting real HTTP connections to the default placeholder InfluxDB URL for users who never configured it, by reusing the same `is_influxdb_configured()` check the startup path already used. ([#217](https://github.com/johanzander/bess-manager/pull/217))
+- **Battery/Home/Price settings startup and PATCH paths unified** — Both paths previously reached `BatterySystemManager` through separate hand-maintained `*_STORE_TO_API` translation registries and a `camelCase`-to-`snake_case` conversion that was load-bearing for startup but a no-op for PATCH. A field present in the store but missing from a registry (e.g. `charging_power_rate`, `efficiency_charge`, `efficiency_discharge`) was silently dropped at startup while still working live via PATCH, reverting to class defaults on every restart. `snake_case` is now the single canonical format for both paths, and the registries are replaced by dataclass-derived field sets kept in sync by a structural test. A stale pre-migration key (e.g. `consumption` coexisting with `default_hourly`) is now filtered out on the PATCH path the same way the startup path already handled it, instead of crashing with `AttributeError`. ([#197](https://github.com/johanzander/bess-manager/pull/197), [#216](https://github.com/johanzander/bess-manager/pull/216), [#219](https://github.com/johanzander/bess-manager/pull/219), [#224](https://github.com/johanzander/bess-manager/pull/224))
+- **Solcast detection failed with non-English entity names** — Solcast sensors were matched via `entity_id` substrings, which fails when Home Assistant translates entity names to the user's language. This was already fixed on beta but never reached main because the only call site never passed the entity registry through; now wired via `SOLCAST_SUFFIX_MAP` and included in the debug bundle exporter's registry filters. ([#223](https://github.com/johanzander/bess-manager/pull/223))
+
+## [9.9.0b5] - 2026-07-03
+
+### Added
+
+- **ENTSO-e / Belpex price provider** — New `entsoe` energy provider reads day-ahead spot prices from the [ENTSO-e Transparency Platform](https://github.com/JaccoR/hass-entso-e) HA integration via the average-price sensor's `prices_today` / `prices_tomorrow` attributes. Supports both hourly (PT60M) and quarterly (PT15M) data, auto-detected by the setup wizard. Prices are treated as VAT-exclusive spot prices. Experimental — not yet real-world validated. (#126)
+- **(beta-only) Multiplicative spot-price adjustment** — `spot_multiplier` / `export_spot_multiplier` settings support contracts that scale the raw spot price rather than only adding a fixed markup (e.g. Belgian Luminus Dynamic: 1.0175× import, 1.018× export). The setup wizard now also pre-fills provider-aware pricing defaults (VAT, markup, multipliers) based on the auto-detected provider. Not yet ported to the production release. (#126)
+
+### Fixed
+
+- **`spot_multiplier` and `export_spot_multiplier` silently reverted to 1.0 on every restart** — These fields were stored correctly by the setup wizard but missing from the startup settings map (`PRICE_STORE_TO_API`), so the optimizer ignored them after every restart. For Belgian ENTSO-e users with a Luminus Dynamic contract (multiplier 1.0175) this caused the optimizer to underestimate import costs by ~1.75% for the entire uptime after each restart. A schema migration ensures existing configurations are also fixed without re-running the wizard. (#126)
+- **Anti-cycling discharge gate no longer over-values stored energy during solar surplus** — When solar already covers all home load for a period, `_compute_reward`'s discharge profitability check no longer credits the discharge with `avoid_purchase_value` (there is no grid purchase to displace when solar covers the load). This closed a leak that let marginal, unprofitable ~0.1 kWh `BATTERY_EXPORT` discharges slip past the `-inf` anti-cycling floor in solar-surplus periods with a full battery. (#204)
+
+## [9.9.0b4] - 2026-06-28
+
+### Fixed (beta-only)
+
+- **`spot_multiplier`/`export_spot_multiplier` not applied to price calculations after restart** — Even after the b3 fix, the optimizer still used 1.0 because the values were not wired into `PriceManager` at init or when settings were updated. Both paths are now fixed. (#126)
+- **Currency not auto-set when switching provider via settings PATCH** — Changing the provider in Settings (not just the wizard) now auto-sets EUR for ENTSO-e and GBP for Octopus. (#126)
+- **ENTSO-e price preview used unrealistic spot value** — The "Preview at spot = X" box in the pricing settings now uses 0.10 EUR/kWh instead of 1.00, matching typical Belgian day-ahead prices and giving a meaningful buy/sell preview. (#126)
+
+## [9.9.0b3] - 2026-06-28
+
+### Fixed (beta-only)
+
+- **`spot_multiplier` and `export_spot_multiplier` silently reverted to 1.0 on every restart** — These fields were stored correctly by the setup wizard but missing from the startup settings map (`PRICE_STORE_TO_API`), so the optimizer ignored them after every restart. For Belgian ENTSO-e users with a Luminus Dynamic contract (multiplier 1.0175) this caused the optimizer to underestimate import costs by ~1.75% for the entire uptime after each restart. A schema migration ensures existing configurations are also fixed without re-running the wizard. (#126)
+
+## [9.9.0b2] - 2026-06-28
+
+### Fixed (beta-only)
+
+- **Current-hour battery level cell now shows live sensor reading** — The "Current" row in the Savings table previously showed only the optimizer's planned end-of-period SOC, which could show a large jump from the previous actual row when the forecast diverged from reality. The cell now shows the planned target as the primary value with a small "Live: X%" line from the live Growatt sensor beneath it, matching the pattern used in the inverter battery card. (#126)
+- **Schedule summary log footer showed "SEK" for all currencies** — Log output from the optimization results table now uses the configured currency (e.g. "EUR" for ENTSO-e users). (#126)
+
+## [9.9.0b1] - 2026-06-27
+
+Syncs beta with all production changes through v9.8.0, and includes the full ENTSO-e/Belpex pricing provider (beta-only, issue #126).
+
+### Added (beta-only)
+
+- **ENTSO-e / Belpex price provider** — New `entsoe` energy provider reads day-ahead spot prices from the [ENTSO-e Transparency Platform](https://github.com/JaccoR/hass-entso-e) HA integration. Auto-detected by the setup wizard. (#126)
+- **Generalised pricing formula** — New `spot_multiplier` and `export_spot_multiplier` fields support Belgian-style dynamic contracts where the supplier applies a multiplicative factor to the spot price. Defaults to 1.0 (no change for existing Nordic users). (#126)
+- **Provider-specific pricing defaults** — Switching provider in the wizard now pre-fills appropriate defaults (ENTSO-e → Luminus Dynamic values for Belgium, Nordpool → Swedish defaults). (#126)
+- **Backend-driven currency detection** — Currency is auto-detected from the provider in the backend (ENTSO-e → EUR, Octopus → GBP). (#126)
+
+### Fixed (beta-only)
+
+- **Solcast detection failed with non-English entity names** — Solcast sensors now matched via entity registry `unique_id` instead of entity_id substring, fixing detection for translated HA installations. (#126)
+- **Currency not auto-set when switching to ENTSO-e** — Setup wizard now always applies EUR when ENTSO-e is selected, overwriting any prior currency value. (#126)
+- **Debug export missing ENTSO-e discovery fields** — Debug exporter now captures ENTSO-e discovery fields (`entsoe_found`, `entsoe_entity`) in the "Resolved by BESS" section. (#126)
+
+**Note (2026-07-03):** these four 9.9.0b1-b4 releases predate the `9.9.0b5` history reset (beta/main was rebuilt from a clean copy of production `main`, since all of beta's non-experimental work had already been merged upstream). The `spot_multiplier` feature above was re-ported into `9.9.0b5`; the Solcast entity-registry fix was found to be dead code (never wired to its call site) in both beta and this history and was not carried forward as-is — see follow-up issue.
 
 ## [9.8.1] - 2026-06-28
 
