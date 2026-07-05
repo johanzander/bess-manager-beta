@@ -24,6 +24,7 @@ interface AlertBannerProps {
   totalCriticalIssues: number;
   recoveries?: HealthRecovery[];
   onAcknowledgeRecoveries?: () => void;
+  onDismiss?: () => void;
   onRecheck?: () => void;
   isRechecking?: boolean;
   timestamp?: string;
@@ -79,6 +80,7 @@ const AlertBanner: React.FC<AlertBannerProps> = ({
   criticalIssues,
   recoveries = [],
   onAcknowledgeRecoveries,
+  onDismiss,
   onRecheck,
   isRechecking = false,
   timestamp,
@@ -178,6 +180,16 @@ const AlertBanner: React.FC<AlertBannerProps> = ({
               )}
             </div>
           </div>
+
+          {onDismiss && (
+            <button
+              onClick={onDismiss}
+              className="p-1 text-red-400 dark:text-red-500 hover:text-red-600 dark:hover:text-red-300 transition-colors duration-200"
+              aria-label="Dismiss alert"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          )}
         </div>
       </div>
     );
@@ -231,6 +243,16 @@ const AlertBanner: React.FC<AlertBannerProps> = ({
               )}
             </div>
           </div>
+
+          {onDismiss && (
+            <button
+              onClick={onDismiss}
+              className="p-1 text-amber-400 dark:text-amber-500 hover:text-amber-600 dark:hover:text-amber-300 transition-colors duration-200"
+              aria-label="Dismiss alert"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          )}
         </div>
       </div>
     );
