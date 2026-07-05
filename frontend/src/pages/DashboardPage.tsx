@@ -97,7 +97,6 @@ export default function DashboardPage({
   }
   
   const [healthSummary, setHealthSummary] = useState<HealthSummary | null>(null);
-  const [dismissedBanner, setDismissedBanner] = useState(false);
   const [isRecheckingHealth, setIsRecheckingHealth] = useState(false);
   const [demoMode, setDemoMode] = useState(false);
 
@@ -121,11 +120,6 @@ export default function DashboardPage({
 
   const [historicalDataStatus, setHistoricalDataStatus] = useState<HistoricalDataStatus | null>(null);
   const [dismissedHistoricalWarning, setDismissedHistoricalWarning] = useState(false);
-
-  // Handle banner dismissal
-  const handleDismissBanner = useCallback(() => {
-    setDismissedBanner(true);
-  }, []);
 
   // Handle historical warning dismissal
   const handleDismissHistoricalWarning = useCallback(() => {
@@ -176,10 +170,6 @@ export default function DashboardPage({
       // Process health summary data
       if (healthResponse?.data) {
         setHealthSummary(healthResponse.data);
-        // Reset dismissed banner if there are new critical issues or warnings
-        if (healthResponse.data.hasCriticalErrors || healthResponse.data.hasWarnings) {
-          setDismissedBanner(false);
-        }
       }
 
       // Process historical data status
@@ -256,7 +246,7 @@ export default function DashboardPage({
       )}
 
       {/* Critical Sensor Alert Banner (also covers a pending self-resolved recovery) */}
-      {healthSummary && (((healthSummary.hasCriticalErrors || healthSummary.hasWarnings) && !dismissedBanner) || recoveries.length > 0) && (
+      {healthSummary && (healthSummary.hasCriticalErrors || healthSummary.hasWarnings || recoveries.length > 0) && (
         <AlertBanner
           hasCriticalErrors={healthSummary.hasCriticalErrors}
           hasWarnings={healthSummary.hasWarnings}
@@ -264,7 +254,6 @@ export default function DashboardPage({
           totalCriticalIssues={healthSummary.totalCriticalIssues}
           recoveries={recoveries}
           onAcknowledgeRecoveries={acknowledgeRecoveries}
-          onDismiss={handleDismissBanner}
           onRecheck={handleRecheckHealth}
           isRechecking={isRecheckingHealth}
           timestamp={healthSummary.timestamp}
