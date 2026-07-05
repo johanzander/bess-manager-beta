@@ -4,6 +4,12 @@ All notable changes to BESS Battery Manager will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Solis inverter platform** (`solis_modbus`) — Solis hybrid inverters can now be configured via the community [Pho3niX90/solis_modbus](https://github.com/Pho3niX90/solis_modbus) integration (local Modbus, Grid Time of Use v2 schedule — 6 charge + 6 discharge periods). Based on SA7BNT's research and initial implementation in bess-manager-beta PR #51, re-verified against the actual integration source and re-implemented to share scheduling logic with Growatt SPH through proper inheritance instead of cross-class private-method calls. **Experimental** — not yet validated against a real Solis installation. (#130)
+
 ## [9.9.0b7] - 2026-07-05
 
 ### Fixed
