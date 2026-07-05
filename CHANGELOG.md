@@ -9,6 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 ### Fixed
 
 - **Profitability gate compared schedules against a solar-blind baseline, occasionally rejecting a good schedule for an all-IDLE fallback that could never discharge** — `solar_only_cost` was hardcoded equal to `grid_only_cost`, so on high-solar days with negative injection prices the gate could reproduce a "battery fills to 100%, exports at negative prices, then sits full through the evening peak" pattern. The gate now compares against the real per-period solar-only-no-battery cost and only substitutes the all-IDLE fallback when it's actually cheaper than the rejected schedule. ([#235](https://github.com/johanzander/bess-manager/pull/235))
+- **Battery cycle cost defaulted to a SEK value for all currencies** — Setup discovery now sets `cycle_cost_per_kwh` from a currency map (EUR 0.035, GBP 0.031) instead of always using the Swedish default, and the wizard mirrors this so the Battery step shows the right value before the user ever saves. ([#237](https://github.com/johanzander/bess-manager/pull/237))
 
 ## [9.9.0b6] - 2026-07-04
 
