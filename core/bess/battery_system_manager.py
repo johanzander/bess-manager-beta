@@ -2345,6 +2345,9 @@ class BatterySystemManager:
                 today_base_cost = sum(
                     pd.economic.grid_only_cost for pd in today_result_periods
                 )
+                today_solar_only_cost = sum(
+                    pd.economic.solar_only_cost for pd in today_result_periods
+                )
                 today_optimized_cost = sum(
                     pd.economic.hourly_cost for pd in today_result_periods
                 )
@@ -2355,14 +2358,15 @@ class BatterySystemManager:
                     pd.energy.battery_discharged for pd in today_result_periods
                 )
                 today_savings = today_base_cost - today_optimized_cost
+                today_solar_savings = today_solar_only_cost - today_optimized_cost
 
                 result.economic_summary = EconomicSummary(
                     grid_only_cost=today_base_cost,
-                    solar_only_cost=today_base_cost,
+                    solar_only_cost=today_solar_only_cost,
                     battery_solar_cost=today_optimized_cost,
-                    grid_to_solar_savings=0.0,
+                    grid_to_solar_savings=today_base_cost - today_solar_only_cost,
                     grid_to_battery_solar_savings=today_savings,
-                    solar_to_battery_solar_savings=today_savings,
+                    solar_to_battery_solar_savings=today_solar_savings,
                     grid_to_battery_solar_savings_pct=(
                         (today_savings / today_base_cost) * 100
                         if today_base_cost > 0
@@ -2953,6 +2957,16 @@ class BatterySystemManager:
             # Don't crash the system, allow degraded mode operation
             self._critical_sensor_failures = ["System Health Check"]
             return {"status": "ERROR", "checks": []}
+
+    def refresh_health_check(self) -> dict[str, Any]:
+        """Re-run the health check and update cached results/critical failures.
+
+        Public entry point for callers outside this class (the periodic
+        scheduler, a manual "recheck" endpoint) so the dashboard banner can
+        reflect current sensor state instead of only what was true at
+        startup or the last settings save.
+        """
+        return self._run_health_check()
 
     def has_critical_sensor_failures(self) -> bool:
         """Check if the system has critical sensor failures (degraded mode)."""

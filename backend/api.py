@@ -8,6 +8,12 @@ import threading
 from datetime import datetime, timedelta
 
 from api_conversion import (
+    BATTERY_MODEL_ATTRS as _BATTERY_MODEL_ATTRS,
+)
+from api_conversion import (
+    HOME_MODEL_ATTRS as _HOME_MODEL_ATTRS,
+)
+from api_conversion import (
     convert_keys_to_camel_case,
     convert_keys_to_snake_case,
 )
@@ -29,7 +35,6 @@ from settings_store import VALID_PLATFORMS
 
 from core.bess import time_utils
 from core.bess.health_check import run_system_health_checks
-from core.bess.settings import BatterySettings as _BatterySettings
 from core.bess.time_utils import get_period_count
 
 router = APIRouter()
@@ -136,7 +141,7 @@ def _refresh_health(bess_controller) -> None:
     Failures are non-fatal — the banner will self-correct on the next poll.
     """
     try:
-        bess_controller.system._run_health_check()
+        bess_controller.system.refresh_health_check()
     except Exception as exc:
         logger.warning("Could not refresh health state after settings update: %s", exc)
 
@@ -157,14 +162,6 @@ _SECTION_MAP: dict[str, str] = {
     "aiAnalyst": "ai_analyst",
     "demoMode": "demo_mode",
 }
-
-# Derived from the BatterySettings dataclass — fields with init=True are the
-# writable attributes; init=False fields (min_soe_kwh, max_soe_kwh,
-# reserved_capacity) are computed and must not be sent to update_settings().
-# temperature_derating is a nested dict handled separately below.
-_BATTERY_MODEL_ATTRS: frozenset[str] = frozenset(
-    f.name for f in dataclasses.fields(_BatterySettings) if f.init
-)
 
 
 @router.get("/api/settings")
@@ -269,7 +266,13 @@ async def patch_settings(updates: dict):
                         obj.weather_entity = td["weather_entity"]
 
             elif store_key == "home":
-                bess_controller.system.update_settings({"home": section})
+                # Filtered to known HomeSettings fields — a stale pre-migration
+                # key (e.g. 'consumption') can coexist with its renamed
+                # successor if a migration was ever interrupted (see
+                # HOME_MODEL_ATTRS's comment in api_conversion.py); passing it
+                # straight through would raise AttributeError.
+                in_mem = {k: v for k, v in section.items() if k in _HOME_MODEL_ATTRS}
+                bess_controller.system.update_settings({"home": in_mem})
 
             elif store_key == "electricity_price":
                 # PriceSettings attribute names match the store field names directly
@@ -1941,6 +1944,27 @@ async def get_system_health():
         return convert_keys_to_camel_case(error_result)
 
 
+@router.post("/api/system-health/recheck")
+async def recheck_system_health():
+    """Manually re-run health checks and refresh the cached dashboard banner state.
+
+    Unlike GET /api/system-health (which runs a fresh check but doesn't touch
+    the cache), this updates ``_cached_health_results``/``_critical_sensor_failures``
+    so the dashboard banner immediately reflects the result — for a "Recheck now"
+    button after the user fixes a sensor in Home Assistant.
+    """
+    from app import bess_controller
+
+    _require_configured_system(bess_controller)
+
+    try:
+        health_results = bess_controller.system.refresh_health_check()
+        return convert_keys_to_camel_case(health_results)
+    except Exception as e:
+        logger.error(f"Error refreshing system health: {e}")
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
 @router.get("/api/dashboard-health-summary")
 async def get_dashboard_health_summary():
     """Get lightweight health summary for dashboard alert banner - only critical issues."""
@@ -2850,34 +2874,18 @@ async def get_setup_status():
 
 _PROVIDER_PRICING_DEFAULTS: dict[str, dict] = {
     "nordpool_official": {
-        "markupRate": 0.08,
-        "vatMultiplier": 1.25,
-        "additionalCosts": 0.773,
-        "taxReduction": 0.20,
         "spotMultiplier": 1.0,
         "exportSpotMultiplier": 1.0,
     },
     "nordpool_hacs": {
-        "markupRate": 0.08,
-        "vatMultiplier": 1.25,
-        "additionalCosts": 0.773,
-        "taxReduction": 0.20,
         "spotMultiplier": 1.0,
         "exportSpotMultiplier": 1.0,
     },
     "entsoe": {
-        "markupRate": 0.198,
-        "vatMultiplier": 1.06,
-        "additionalCosts": 0.0,
-        "taxReduction": -0.012685,
         "spotMultiplier": 1.0175,
         "exportSpotMultiplier": 1.018,
     },
     "octopus": {
-        "markupRate": 0.0,
-        "vatMultiplier": 1.0,
-        "additionalCosts": 0.0,
-        "taxReduction": 0.0,
         "spotMultiplier": 1.0,
         "exportSpotMultiplier": 1.0,
     },
@@ -2885,7 +2893,7 @@ _PROVIDER_PRICING_DEFAULTS: dict[str, dict] = {
 
 
 def _pricing_defaults_for_discovery(integrations: dict) -> dict:
-    """Return pricing defaults matching the auto-detected provider."""
+    """Return suggested spot-multiplier defaults matching the auto-detected provider."""
     if integrations.get("octopus_found") and not integrations.get("nordpool_found"):
         return _PROVIDER_PRICING_DEFAULTS["octopus"]
     if integrations.get("entsoe_found") and not integrations.get("nordpool_found"):
@@ -2940,12 +2948,20 @@ async def run_setup_discovery():
         detected_currency = integrations.get("currency")
         detected_vat = integrations.get("vat_multiplier")
         if detected_currency or detected_vat is not None:
+            from core.bess.settings import CYCLE_COST_BY_CURRENCY
+
             home = bess_controller.settings_store.get_section("home")
             elec = bess_controller.settings_store.get_section("electricity_price")
+            battery = bess_controller.settings_store.get_section("battery")
             changed = False
+            battery_changed = False
             if detected_currency and home.get("currency") != detected_currency:
                 home["currency"] = detected_currency
                 changed = True
+                cycle_cost = CYCLE_COST_BY_CURRENCY.get(detected_currency)
+                if cycle_cost is not None:
+                    battery["cycle_cost_per_kwh"] = cycle_cost
+                    battery_changed = True
             if detected_vat is not None and elec.get("vat_multiplier") != detected_vat:
                 elec["vat_multiplier"] = detected_vat
                 changed = True
@@ -2963,13 +2979,16 @@ async def run_setup_discovery():
                 if ep.get("provider") != "octopus":
                     ep["provider"] = "octopus"
                     bess_controller.settings_store.save_section("energy_provider", ep)
+            if battery_changed:
+                bess_controller.settings_store.save_section("battery", battery)
             if changed:
                 bess_controller.settings_store.save_section("home", home)
                 bess_controller.settings_store.save_section("electricity_price", elec)
                 logger.info(
-                    "Persisted locale defaults: currency=%s, vat=%s",
+                    "Persisted locale defaults: currency=%s, vat=%s, cycle_cost=%s",
                     detected_currency,
                     detected_vat,
+                    battery.get("cycle_cost_per_kwh") if battery_changed else None,
                 )
 
         sensors: dict[str, str] = {}
@@ -3029,7 +3048,7 @@ async def run_setup_discovery():
                 sensors[phase_key] = entity_id
 
         # Discover optional integration sensors (Solcast, Weather, EV, etc.)
-        optional_sensors = ha.discover_optional_sensors(states)
+        optional_sensors = ha.discover_optional_sensors(states, registry)
         for key, entity_id in optional_sensors.items():
             if key not in sensors:
                 sensors[key] = entity_id
@@ -3075,12 +3094,14 @@ async def run_setup_discovery():
                 "detected_phase_count": detected_phase_count,
                 "currency": integrations["currency"],
                 "vat_multiplier": integrations["vat_multiplier"],
-                "pricingDefaults": _pricing_defaults_for_discovery(integrations),
             }
         )
         # Attach sensor dicts without key conversion
         result["sensors"] = sensors
         result["platformSensors"] = platform_sensors
+        # Suggested spot-multiplier defaults for the auto-detected provider —
+        # already camelCase, attach after conversion to avoid double-conversion.
+        result["pricingDefaults"] = _pricing_defaults_for_discovery(integrations)
         # Attach Octopus entities for pricing form auto-fill
         if octopus_entities:
             result["octopusEntities"] = octopus_entities
@@ -3175,6 +3196,8 @@ async def setup_complete(payload: APISetupCompletePayload):
             "vatMultiplier": "vat_multiplier",
             "additionalCosts": "additional_costs",
             "taxReduction": "tax_reduction",
+            "spotMultiplier": "spot_multiplier",
+            "exportSpotMultiplier": "export_spot_multiplier",
         }
         area = payload.area or payload.nordpoolArea
         if any(getattr(payload, f) is not None for f in _PRICE_MAP) or area:
@@ -3269,38 +3292,46 @@ async def setup_complete(payload: APISetupCompletePayload):
 
         live_updates: dict = {}
         if "battery" in sections:
+            # BatterySettings.update() takes snake_case (store field names)
+            # directly — no camelCase translation (issue #197, #219).
             live_updates["battery"] = _nn(
                 {
-                    "totalCapacity": payload.totalCapacity,
-                    "minSoc": payload.minSoc,
-                    "maxSoc": payload.maxSoc,
-                    "maxChargePowerKw": payload.maxChargeDischargePower,
-                    "maxDischargePowerKw": payload.maxChargeDischargePower,
-                    "cycleCostPerKwh": payload.cycleCost,
-                    "minActionProfitThreshold": payload.minActionProfitThreshold,
+                    "total_capacity": payload.totalCapacity,
+                    "min_soc": payload.minSoc,
+                    "max_soc": payload.maxSoc,
+                    "max_charge_power_kw": payload.maxChargeDischargePower,
+                    "max_discharge_power_kw": payload.maxChargeDischargePower,
+                    "cycle_cost_per_kwh": payload.cycleCost,
+                    "min_action_profit_threshold": payload.minActionProfitThreshold,
                 }
             )
         if "home" in sections:
+            # HomeSettings.update() takes snake_case (store field names)
+            # directly — no camelCase translation (issue #197, #219).
             live_updates["home"] = _nn(
                 {
-                    "defaultHourly": payload.consumption,
+                    "default_hourly": payload.consumption,
                     "currency": payload.currency,
-                    "consumptionStrategy": payload.consumptionStrategy,
-                    "maxFuseCurrent": payload.maxFuseCurrent,
+                    "consumption_strategy": payload.consumptionStrategy,
+                    "max_fuse_current": payload.maxFuseCurrent,
                     "voltage": payload.voltage,
-                    "safetyMargin": payload.safetyMarginFactor,
-                    "phaseCount": payload.phaseCount,
-                    "powerMonitoringEnabled": payload.powerMonitoringEnabled,
+                    "safety_margin": payload.safetyMarginFactor,
+                    "phase_count": payload.phaseCount,
+                    "power_monitoring_enabled": payload.powerMonitoringEnabled,
                 }
             )
         if "electricity_price" in sections:
+            # PriceSettings.update() takes snake_case (store field names)
+            # directly — no camelCase translation (issue #197).
             live_updates["price"] = _nn(
                 {
                     "area": sections["electricity_price"].get("area"),
-                    "markupRate": payload.markupRate,
-                    "vatMultiplier": payload.vatMultiplier,
-                    "additionalCosts": payload.additionalCosts,
-                    "taxReduction": payload.taxReduction,
+                    "markup_rate": payload.markupRate,
+                    "vat_multiplier": payload.vatMultiplier,
+                    "additional_costs": payload.additionalCosts,
+                    "tax_reduction": payload.taxReduction,
+                    "spot_multiplier": payload.spotMultiplier,
+                    "export_spot_multiplier": payload.exportSpotMultiplier,
                 }
             )
         if live_updates:
@@ -3347,7 +3378,7 @@ async def setup_complete(payload: APISetupCompletePayload):
         # Re-run health check so the dashboard banner reflects the new configuration
         # instead of the stale failures recorded at startup (before sensors were set).
         try:
-            bess_controller.system._run_health_check()
+            bess_controller.system.refresh_health_check()
         except Exception as health_err:
             logger.warning("Could not re-run health check after setup: %s", health_err)
 

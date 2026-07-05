@@ -417,6 +417,8 @@ const SettingsPage: React.FC = () => {
           vatMultiplier: pricingForm.vatMultiplier,
           additionalCosts: pricingForm.additionalCosts,
           taxReduction: pricingForm.taxReduction,
+          spotMultiplier: pricingForm.spotMultiplier,
+          exportSpotMultiplier: pricingForm.exportSpotMultiplier,
           useActualPrice: false,
         },
         energyProvider: {

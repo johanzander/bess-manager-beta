@@ -1539,32 +1539,47 @@ class TestFrontendSensorKeysMatchBackend:
 
 
 # ---------------------------------------------------------------------------
-# ENTSO-e Transparency Platform discovery
+# Solcast entity-registry discovery (#218): unique_id matching instead of
+# entity_id substrings, so detection survives non-English HA locale renames.
 # ---------------------------------------------------------------------------
-#
-# Registry shape verified against github.com/JaccoR/hass-entso-e sensor.py:
-#   _attr_unique_id = f"entsoe.{name}_{description.key}"   (key="avg_price")
-#   entity_id       = f"{DOMAIN}.{slugify(name)}_{slugify(description.name)}"
-# Only the avg_price sensor carries prices_today / prices_tomorrow attributes.
-# This mirrors issue #126 (user "Belpex H").
 
 
-def _entsoe_registry() -> list[dict]:
-    """Entity registry for the ENTSO-e integration with custom name 'Belpex H'."""
-    return [
-        _entity(
-            "sensor.belpex_h_current_electricity_market_price",
-            "entsoe",
-            "entsoe.Belpex H_current_price",
-        ),
-        _entity(
-            "sensor.belpex_h_average_electricity_price",
-            "entsoe",
-            "entsoe.Belpex H_avg_price",
-        ),
-        _entity(
-            "sensor.belpex_h_highest_energy_price",
-            "entsoe",
-            "entsoe.Belpex H_max_price",
-        ),
-    ]
+class TestSolcastEntityRegistryDiscovery:
+    def test_detects_solcast_via_unique_id_with_localized_entity_id(self):
+        """A renamed (non-English) entity_id must still be found via unique_id."""
+        controller = _make_controller()
+        registry = [
+            _entity(
+                "sensor.solpanel_prognos_idag",
+                "solcast_solar",
+                "abc123_total_kwh_forecast_today",
+            ),
+            _entity(
+                "sensor.solpanel_prognos_imorgon",
+                "solcast_solar",
+                "abc123_total_kwh_forecast_tomorrow",
+            ),
+        ]
+
+        result = controller.discover_optional_sensors([], registry)
+
+        assert result["solar_forecast_today"] == "sensor.solpanel_prognos_idag"
+        assert result["solar_forecast_tomorrow"] == "sensor.solpanel_prognos_imorgon"
+
+    def test_no_solcast_detection_without_entity_registry(self):
+        """English-locale entity_id substrings alone no longer detect Solcast.
+
+        Registry-based unique_id matching is the only path now (matches the
+        beta reference implementation) — states-only substring matching was
+        removed because it broke on non-English HA installs.
+        """
+        controller = _make_controller()
+        states = [
+            {"entity_id": "sensor.solcast_pv_forecast_forecast_today"},
+            {"entity_id": "sensor.solcast_pv_forecast_forecast_tomorrow"},
+        ]
+
+        result = controller.discover_optional_sensors(states, None)
+
+        assert "solar_forecast_today" not in result
+        assert "solar_forecast_tomorrow" not in result

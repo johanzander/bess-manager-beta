@@ -19,6 +19,14 @@ import type { DiscoveryResult, InverterForm } from '../components/settings/Senso
 
 const STEPS = ['Scan', 'Review Sensors', 'Electricity Pricing', 'Battery', 'Home', 'Control Mode', 'Done'];
 
+// Battery cycle cost approximates wear cost per kWh cycled, so the SEK
+// default (0.40) is wrong for other currencies. Mirrors
+// core.bess.settings.CYCLE_COST_BY_CURRENCY.
+const CYCLE_COST_BY_CURRENCY: Record<string, number> = { SEK: 0.40, EUR: 0.035, GBP: 0.031 };
+// Placeholder values (bootstrap SEK default, initial form default) treated as
+// "not yet user-configured" so a detected currency can safely replace them.
+const UNSET_CYCLE_COST_DEFAULTS = new Set([0.40, 0.50]);
+
 // ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
@@ -113,7 +121,12 @@ const SetupWizardPage: React.FC = () => {
       const autoArea = hasOfficialNordpool ? d.nordpoolArea : (d.nordpoolCustomArea || d.nordpoolArea);
       setPricingForm(f => ({
         ...f,
-        ...(d.pricingDefaults ?? {}),
+        // Only seed spot-multiplier defaults when the provider is newly
+        // auto-detected (changing) — never on a re-scan of an already
+        // configured provider, or this would clobber a saved custom
+        // contract-specific value (e.g. a real Luminus vs. non-Luminus
+        // ENTSO-e multiplier) every time the wizard mounts or rescans.
+        ...(autoProvider && autoProvider !== f.provider ? (d.pricingDefaults ?? {}) : {}),
         ...(autoProvider ? { provider: autoProvider } : {}),
         ...(d.currency ? { currency: d.currency } : {}),
         ...(autoArea ? { area: autoArea } : {}),
@@ -126,6 +139,14 @@ const SetupWizardPage: React.FC = () => {
         ...(d.octopusEntities?.exportTomorrow ? { octopusExportTomorrowEntity: d.octopusEntities.exportTomorrow } : {}),
         ...(d.entsoeEntity ? { entsoeEntity: d.entsoeEntity } : {}),
       }));
+      if (d.currency && CYCLE_COST_BY_CURRENCY[d.currency] !== undefined) {
+        const cycleCost = CYCLE_COST_BY_CURRENCY[d.currency];
+        setBatteryForm(f => (
+          UNSET_CYCLE_COST_DEFAULTS.has(f.cycleCostPerKwh)
+            ? { ...f, cycleCostPerKwh: cycleCost }
+            : f
+        ));
+      }
       // Auto-select the detected platform. Prefer an already configured
       // platform, then Solis when solis_modbus sensors are present.
       const existing = existingSensorsRef.current;

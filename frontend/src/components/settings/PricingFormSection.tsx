@@ -25,42 +25,18 @@ interface Props {
   onChange: (f: PricingForm) => void;
 }
 
-const PROVIDER_DEFAULTS: Record<string, Partial<PricingForm>> = {
-  nordpool_official: {
-    markupRate: 0.08, vatMultiplier: 1.25, additionalCosts: 0.77,
-    taxReduction: 0.20, spotMultiplier: 1.0, exportSpotMultiplier: 1.0,
-  },
-  nordpool_hacs: {
-    markupRate: 0.08, vatMultiplier: 1.25, additionalCosts: 0.77,
-    taxReduction: 0.20, spotMultiplier: 1.0, exportSpotMultiplier: 1.0,
-  },
-  entsoe: {
-    markupRate: 0.198, vatMultiplier: 1.06, additionalCosts: 0.0,
-    taxReduction: -0.012685, spotMultiplier: 1.0175, exportSpotMultiplier: 1.018,
-  },
-  octopus: {
-    markupRate: 0.0, vatMultiplier: 1.0, additionalCosts: 0.0,
-    taxReduction: 0.0, spotMultiplier: 1.0, exportSpotMultiplier: 1.0,
-  },
-};
-
 export function PricingFormSection({ form, onChange }: Props) {
   const isOctopus = form.provider === 'octopus';
   const isEntsoe = form.provider === 'entsoe';
-  const currency = form.currency;
+  const currency = isOctopus ? 'GBP' : form.currency;
 
   const sm = form.spotMultiplier ?? 1.0;
   const esm = form.exportSpotMultiplier ?? 1.0;
-  const previewSpot = 0.10;
+  const previewSpot = 1.0;
   const previewBuy = Number(
     ((previewSpot * sm + form.markupRate) * form.vatMultiplier + form.additionalCosts).toFixed(4),
   );
   const previewSell = Number((previewSpot * esm + form.taxReduction).toFixed(4));
-
-  const handleProviderChange = (v: string) => {
-    const defaults = PROVIDER_DEFAULTS[v] ?? {};
-    onChange({ ...form, provider: v, ...defaults });
-  };
 
   return (
     <div className="space-y-3">
@@ -77,7 +53,7 @@ export function PricingFormSection({ form, onChange }: Props) {
             { value: 'entsoe', label: 'ENTSO-e / Belpex (Transparency Platform)' },
           ],
           form.provider,
-          handleProviderChange,
+          v => onChange({ ...form, provider: v }),
         )}
 
         {form.provider === 'nordpool_official' && (
@@ -119,7 +95,7 @@ export function PricingFormSection({ form, onChange }: Props) {
           </div>
         )}
 
-        {isEntsoe && (
+        {form.provider === 'entsoe' && (
           <div className="space-y-3">
             {txtInput('Sensor', form.entsoeEntity,
               v => onChange({ ...form, entsoeEntity: v }), 'sensor.…_average_electricity_price')}
@@ -144,13 +120,13 @@ export function PricingFormSection({ form, onChange }: Props) {
               {isEntsoe && numField('Import Spot Multiplier', form.spotMultiplier,
                 v => onChange({ ...form, spotMultiplier: v }),
                 { unit: 'factor (1.0 = no adjustment)', min: 0.5, max: 2.0, step: 0.0001 })}
-              {numField(isEntsoe ? 'Fixed Costs (ex-VAT)' : 'Markup Rate', form.markupRate,
+              {numField('Markup Rate', form.markupRate,
                 v => onChange({ ...form, markupRate: v }),
                 { unit: `${currency}/kWh (ex-VAT)`, min: 0, step: 0.001 })}
               {numField('VAT Multiplier', form.vatMultiplier,
                 v => onChange({ ...form, vatMultiplier: v }),
                 { unit: 'factor', min: 1, step: 0.01 })}
-              {numField(isEntsoe ? 'Additional Costs (incl. VAT)' : 'Additional Costs', form.additionalCosts,
+              {numField('Additional Costs', form.additionalCosts,
                 v => onChange({ ...form, additionalCosts: v }),
                 { unit: `${currency}/kWh`, min: 0, step: 0.001 })}
               {isEntsoe && numField('Export Spot Multiplier', form.exportSpotMultiplier,
@@ -158,22 +134,21 @@ export function PricingFormSection({ form, onChange }: Props) {
                 { unit: 'factor (1.0 = no adjustment)', min: 0.5, max: 2.0, step: 0.0001 })}
               {numField('Export Compensation', form.taxReduction,
                 v => onChange({ ...form, taxReduction: v }),
-                { unit: `${currency}/kWh`, step: 0.001 })}
+                { unit: `${currency}/kWh`, min: 0, step: 0.001 })}
             </div>
-
             {isEntsoe ? (
               <div className="rounded-lg bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800/40 px-4 py-3 space-y-3 text-xs text-gray-600 dark:text-gray-400">
                 <div className="space-y-2">
                   <div><span className="font-medium text-blue-900 dark:text-blue-200">Import Spot Multiplier:</span> Contract-specific factor applied to raw spot price. E.g. Luminus Dynamic: 1.0175.</div>
-                  <div><span className="font-medium text-blue-900 dark:text-blue-200">Fixed Costs (ex-VAT):</span> Sum of per-kWh charges before VAT: supplier margin, excise duty, grid fees, etc. E.g. Luminus/Flanders: ~0.198 EUR/kWh.</div>
+                  <div><span className="font-medium text-blue-900 dark:text-blue-200">Markup Rate:</span> Fixed costs before VAT: supplier margin, excise duty, grid fees, etc.</div>
                   <div><span className="font-medium text-blue-900 dark:text-blue-200">VAT Multiplier:</span> VAT factor on import. 1.06 = 6% (Belgium), 1.21 = 21% (Netherlands).</div>
                   <div><span className="font-medium text-blue-900 dark:text-blue-200">Additional Costs:</span> Post-VAT fixed costs. Set to 0 if all costs are already included above.</div>
                   <div><span className="font-medium text-blue-900 dark:text-blue-200">Export Spot Multiplier:</span> Contract-specific factor on spot for export/injection. E.g. Luminus: 1.018.</div>
-                  <div><span className="font-medium text-blue-900 dark:text-blue-200">Export Compensation:</span> Fixed per-kWh payment or deduction for exported energy. Use negative values for deductions. E.g. Luminus: -0.012685.</div>
+                  <div><span className="font-medium text-blue-900 dark:text-blue-200">Export Compensation:</span> Fixed per-kWh payment or deduction for exported energy. Use negative values for deductions.</div>
                 </div>
                 <div className="space-y-2 pt-2 border-t border-blue-200 dark:border-blue-700">
                   <p className="font-medium text-blue-900 dark:text-blue-200">How the raw spot price is converted:</p>
-                  <p className="pl-2 border-l-2 border-blue-300 dark:border-blue-600"><strong>Buy price:</strong> (spot × import multiplier + fixed costs) × VAT + additional costs</p>
+                  <p className="pl-2 border-l-2 border-blue-300 dark:border-blue-600"><strong>Buy price:</strong> (spot × import multiplier + markup) × VAT + additional costs</p>
                   <p className="pl-2 border-l-2 border-blue-300 dark:border-blue-600"><strong>Sell price:</strong> spot × export multiplier + export compensation</p>
                 </div>
               </div>
@@ -185,6 +160,7 @@ export function PricingFormSection({ form, onChange }: Props) {
                   <div><span className="font-medium text-blue-900 dark:text-blue-200">Additional Costs:</span> Grid transfer fee + energy tax (sum ex-VAT, then VAT applied). E.g. E.ON: (0.2584 + 0.3600) × 1.25 = 0.773 SEK/kWh.</div>
                   <div><span className="font-medium text-blue-900 dark:text-blue-200">Export Compensation:</span> Per-kWh payment from grid operator (Nätnytta) when selling surplus electricity. Check your energy bill under "Producent/Självfaktura". E.g. E.ON: 0.1988 (19.88 öre/kWh).</div>
                 </div>
+
                 <div className="space-y-2 pt-2 border-t border-blue-200 dark:border-blue-700">
                   <p className="font-medium text-blue-900 dark:text-blue-200">How the raw spot price is converted:</p>
                   <p className="pl-2 border-l-2 border-blue-300 dark:border-blue-600"><strong>Buy price:</strong> (raw spot + markup) × VAT multiplier + grid fees</p>
@@ -193,10 +169,9 @@ export function PricingFormSection({ form, onChange }: Props) {
                 </div>
               </div>
             )}
-
             <div className="rounded-lg bg-gray-50 dark:bg-gray-700/50 px-4 py-3 text-sm space-y-1.5">
               <p className="text-xs text-gray-500 dark:text-gray-400">
-                Preview at spot = 0.10 {currency}/kWh
+                Preview at spot = 1.00
               </p>
               <div className="flex justify-between font-medium">
                 <span className="text-gray-700 dark:text-gray-200">Buy price</span>

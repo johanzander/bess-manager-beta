@@ -3017,8 +3017,9 @@ class HomeAssistantAPIController:
     ) -> dict[str, str]:
         """Discover optional integration sensors.
 
-        Uses the entity registry (unique_id) for Solcast and entity states
-        for weather, consumption forecast, and discharge inhibit sensors.
+        Uses the entity registry (unique_id) for Solcast detection and entity
+        states for weather, consumption forecast, and discharge inhibit
+        sensors.
 
         Args:
             states: List of state dicts from /api/states

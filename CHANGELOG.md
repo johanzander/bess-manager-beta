@@ -4,7 +4,28 @@ All notable changes to BESS Battery Manager will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [9.9.0b7] - 2026-07-05
+
+### Fixed
+
+- **Profitability gate compared schedules against a solar-blind baseline, occasionally rejecting a good schedule for an all-IDLE fallback that could never discharge** — `solar_only_cost` was hardcoded equal to `grid_only_cost`, so on high-solar days with negative injection prices the gate could reproduce a "battery fills to 100%, exports at negative prices, then sits full through the evening peak" pattern. The gate now compares against the real per-period solar-only-no-battery cost and only substitutes the all-IDLE fallback when it's actually cheaper than the rejected schedule. ([#235](https://github.com/johanzander/bess-manager/pull/235))
+- **Battery cycle cost defaulted to a SEK value for all currencies** — Setup discovery now sets `cycle_cost_per_kwh` from a currency map (EUR 0.035, GBP 0.031) instead of always using the Swedish default, and the wizard mirrors this so the Battery step shows the right value before the user ever saves. ([#237](https://github.com/johanzander/bess-manager/pull/237))
+
+## [9.9.0b6] - 2026-07-04
+
+Syncs beta with production main through v9.8.1 plus three additional merged PRs.
+
+### Changed
+
+- **Multiplicative spot-price adjustment now uses main's audited implementation**, replacing beta's superseded standalone port. ([#227](https://github.com/johanzander/bess-manager/pull/227))
+
+### Fixed
+
+- **Anti-cycling discharge gate no longer over-values stored energy during solar surplus.** ([#209](https://github.com/johanzander/bess-manager/pull/209))
+- **`GRID_CHARGING` throttled to ~1% of the planned rate — fixed.** ([#207](https://github.com/johanzander/bess-manager/pull/207))
+- **`LOAD_SUPPORT` discharge rate not reaching the inverter on Solax Modbus — fixed.** ([#211](https://github.com/johanzander/bess-manager/pull/211))
+- **Battery/Home/Price settings startup and PATCH paths unified**, fixing a live efficiency-field revert-on-restart bug. ([#197](https://github.com/johanzander/bess-manager/pull/197), [#216](https://github.com/johanzander/bess-manager/pull/216), [#219](https://github.com/johanzander/bess-manager/pull/219), [#224](https://github.com/johanzander/bess-manager/pull/224))
+- **Solcast detection failed with non-English entity names — fixed via entity registry `unique_id` matching.** ([#223](https://github.com/johanzander/bess-manager/pull/223))
 
 ## [9.9.0b5] - 2026-07-03
 

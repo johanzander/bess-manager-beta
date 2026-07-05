@@ -57,6 +57,16 @@
 - All assignments and references in `decision_intelligence.py`, `sph_schedule.py`, `battery_system_manager.py`, and any API serialization
 - Frontend: any display label or type referencing `strategicIntent` / `strategic_intent`
 
+### **Minor cleanup from issue #201 (stale health-check banner) fix**
+
+**Impact**: Low | **Effort**: Low | **Dependencies**: `core/bess/influxdb_helper.py`, `backend/api.py`
+
+**Description**: A few small, non-blocking cleanups identified during code review of the #201 fix:
+
+- `get_sensor_data_batch` and `get_power_sensor_data_batch` (`core/bess/influxdb_helper.py`) each have their own copy of the `if not is_influxdb_configured(): ...` early-return guard — could be factored into a shared decorator/helper if a third call site appears.
+- `GET /api/system-health` and `POST /api/system-health/recheck` (`backend/api.py`) share the same `_require_configured_system` + health-check + `convert_keys_to_camel_case` + `HTTPException(500)` shape, differing only in whether the result is cached. Worth revisiting if a third variant is ever needed.
+- The new 5-minute health-check cron job (`backend/app.py`) also re-runs `test_influxdb_connection()` for the subset of users who *do* have InfluxDB configured (it correctly skips for everyone else). This is intentional — same cadence agreed for the dashboard banner — but worth knowing if InfluxDB load ever becomes a complaint.
+
 ### **Investigate redundant `power` gate in strategic intent detection**
 
 **Impact**: Low | **Effort**: Low | **Dependencies**: `decision_intelligence.py`, `dp_battery_algorithm.py`
@@ -648,6 +658,12 @@ Additionally, `device_sn` is extracted, returned in the API response as `deviceS
 
 - Refactor all API endpoints to use dataclass-based serialization (with robust mapping for all field variants) for consistent, type-safe, and future-proof API responses. Ensure all details and fields are preserved as in the original dict-based implementation.
 - Check if all sensors in config.yaml are actually needed and used (lifetime e.g.)
+
+**From #221 (spot_multiplier/export_spot_multiplier) code review — deferred cleanup, not bugs**:
+
+- `backend/api.py`'s `_pricing_defaults_for_discovery()` duplicates the provider-priority chain (`octopus > entsoe > nordpool_official > nordpool_hacs`, gated on `not nordpool_found`) already computed independently in `frontend/src/pages/SetupWizardPage.tsx`'s `autoProvider` logic. The two can drift out of sync if the priority order changes in only one place. Consider deriving both from a single shared source (e.g. have the backend return the resolved provider and have the frontend just consume it, instead of recomputing it).
+- `backend/api_conversion.py`'s `PRICE_STORE_TO_API` (startup/read path) and `backend/api.py`'s `_PRICE_MAP` in `setup_complete()` (wizard-write path) are two independently-maintained camelCase↔snake_case tables for the same `PriceSettings` fields. The new `TestPriceModelAttrsConsistency` contract test (added in #221) only guards `PRICE_STORE_TO_API` — `_PRICE_MAP` can still silently drift for a future field with no test to catch it. Consider consolidating to one table, or extending the contract test to also cover `_PRICE_MAP`.
+- `backend/settings_store.py`'s `_migrate_schema()` electricity_price migration block hardcodes `spot_multiplier`/`export_spot_multiplier`/`use_actual_price` by name instead of iterating `PRICE_STORE_TO_API` + `PriceSettings` defaults generically. Every future `PriceSettings` field will need a new hand-written migration block, and it's easy to forget (silent `ValueError` in `build_system_settings()` at startup for existing users' configs). Consider making the migration generic against `PRICE_STORE_TO_API`.
 
 **TOU Segment Matching is Fragile**:
 The current TOU comparison uses exact matching on start_time, end_time, batt_mode. If a segment shifts by 15 minutes (e.g., 00:00-00:59 → 00:15-01:14), it's seen as completely different, resulting in 2 hardware writes (disable old + add new) instead of 1 update. Consider:
