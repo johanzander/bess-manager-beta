@@ -39,6 +39,7 @@ VALID_PLATFORMS = (
     "solax_modbus_growatt_min",
     "solax_modbus_growatt_sph",
     "solax_modbus_native",
+    "solis_modbus",
 )
 
 # Sensor keys that are shared across all platforms (not inverter-specific).
@@ -62,6 +63,7 @@ VALID_PLATFORMS = (
     "solax_modbus_growatt_min",
     "solax_modbus_growatt_sph",
     "solax_modbus_native",
+    "solis_modbus",
 )
 
 # Sensor keys that are shared across all platforms (not inverter-specific).
@@ -418,6 +420,7 @@ class SettingsStore:
                 "solax_modbus_growatt_min": {},
                 "solax_modbus_growatt_sph": {},
                 "solax_modbus_native": {},
+                "solis_modbus": {},
                 "shared": {},
             },
             "demo_mode": {"enabled": False},
@@ -599,6 +602,36 @@ class SettingsStore:
                     len(shared),
                 )
                 changed = True
+        elif isinstance(sensors, dict) and "platform" in sensors:
+            for platform in VALID_PLATFORMS:
+                if platform not in sensors:
+                    sensors[platform] = {}
+                    changed = True
+            if "shared" not in sensors:
+                sensors["shared"] = {}
+                changed = True
+            self.data["sensors"] = sensors
+
+        # --- electricity_price: spot_multiplier / export_spot_multiplier / use_actual_price ---
+        # These were stored by the wizard but missing from PRICE_STORE_TO_API, so they
+        # were silently dropped at startup (optimizer used the PriceSettings defaults).
+        # Add defaults for configs written before these fields were included.
+        price = self.data.get("electricity_price")
+        if isinstance(price, dict):
+            from core.bess.settings import (
+                EXPORT_SPOT_MULTIPLIER,
+                SPOT_MULTIPLIER,
+                USE_ACTUAL_PRICE,
+            )
+
+            for key, default in (
+                ("spot_multiplier", SPOT_MULTIPLIER),
+                ("export_spot_multiplier", EXPORT_SPOT_MULTIPLIER),
+                ("use_actual_price", USE_ACTUAL_PRICE),
+            ):
+                if key not in price:
+                    price[key] = default
+                    changed = True
 
         # --- demo_mode section (added v9.5) ---
         if "demo_mode" not in self.data:

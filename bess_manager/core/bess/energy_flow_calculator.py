@@ -1,0 +1,186 @@
+"""
+EnergyFlowCalculator - Extract and preserve the sophisticated energy flow logic.
+
+This preserves the excellent energy flow calculation logic from energy_manager.py
+while separating it from sensor collection and predictions.
+"""
+
+import logging
+
+from .settings import BatterySettings
+
+logger = logging.getLogger(__name__)
+
+
+class EnergyFlowCalculator:
+    """Calculates all energy flows in the systemand validates energy balance."""
+
+    def __init__(self, battery_settings: BatterySettings, ha_controller):
+        """Initialize energy flow calculator.
+
+        Args:
+            battery_settings: Battery settings reference (shared, always up-to-date)
+            ha_controller: HA controller for sensor resolution (required)
+        """
+        self.battery_settings = battery_settings
+        self.ha_controller = ha_controller
+        self.sensor_to_flow_map = self._build_sensor_flow_mapping()
+
+    def rebuild_sensor_mapping(self) -> None:
+        """Re-resolve sensor entity IDs after configuration changes."""
+        self.sensor_to_flow_map = self._build_sensor_flow_mapping()
+
+    def _build_sensor_flow_mapping(self) -> dict[str, str]:
+        """Build sensor to flow mapping using the abstraction layer.
+
+        Returns mapping of entity IDs (without 'sensor.' prefix) to flow field names.
+        """
+        # Only the 5 core energy sensors are mapped here.
+        # load_consumption, system_production, and self_consumption
+        # are derived in _calculate_derived_flows().
+        sensor_key_to_flow = {
+            "lifetime_battery_charged": "battery_charged",
+            "lifetime_battery_discharged": "battery_discharged",
+            "lifetime_solar_energy": "solar_production",
+            "lifetime_import_from_grid": "import_from_grid",
+            "lifetime_export_to_grid": "export_to_grid",
+        }
+        # Resolve to actual entity IDs
+        resolved_mapping = {}
+        for sensor_key, flow_name in sensor_key_to_flow.items():
+            entity_id = self.ha_controller.resolve_sensor_for_influxdb(sensor_key)
+            if entity_id:
+                resolved_mapping[entity_id] = flow_name
+            else:
+                # Sensor not configured - skip
+                logger.debug(f"Sensor key '{sensor_key}' not configured, skipping")
+        return resolved_mapping
+
+    def calculate_period_flows(
+        self,
+        current_readings: dict[str, float],
+        previous_readings: dict[str, float],
+    ) -> dict[str, float] | None:
+        """Calculate energy flows between two sensor readings for a period.
+
+        This calculates flows for a single 15-minute period (quarterly resolution).
+
+        Args:
+            current_readings: Current period sensor readings
+            previous_readings: Previous period sensor readings
+
+        Returns:
+            Dict of calculated energy flows or None if calculation fails
+        """
+        if not current_readings or not previous_readings:
+            logger.warning("Missing readings - cannot calculate flows")
+            return None
+
+        # Initialize flows with zeros
+        flows = {
+            "battery_charged": 0.0,
+            "battery_discharged": 0.0,
+            "solar_production": 0.0,
+            "self_consumption": 0.0,
+            "export_to_grid": 0.0,
+            "load_consumption": 0.0,
+            "import_from_grid": 0.0,
+            "grid_to_battery": 0.0,
+            "solar_to_battery": 0.0,
+            "system_production": 0.0,
+            "aux_load": 0.0,
+        }
+
+        # Use pre-built sensor to flow mapping
+        sensor_to_flow = self.sensor_to_flow_map
+
+        # Calculate differences for each sensor
+        for sensor_name, flow_key in sensor_to_flow.items():
+            current_value = current_readings.get(sensor_name)
+            previous_value = previous_readings.get(sensor_name)
+
+            if current_value is None or previous_value is None:
+                logger.debug("Missing value for %s", sensor_name)
+                continue
+
+            try:
+                current_value = float(current_value)
+                previous_value = float(previous_value)
+
+                # Handle sensor value decrease (fluctuation or measurement noise)
+                if current_value < previous_value:
+                    logger.debug(
+                        "Sensor %s decreased: %.2f → %.2f (treating as zero)",
+                        sensor_name,
+                        previous_value,
+                        current_value,
+                    )
+                    flows[flow_key] = 0.0
+                else:
+                    flows[flow_key] = current_value - previous_value
+
+            except (ValueError, TypeError) as e:
+                logger.warning("Error calculating flow for %s: %s", sensor_name, e)
+
+        # Calculate derived flows
+        return self._calculate_derived_flows(flows)
+
+    def _calculate_derived_flows(self, flows: dict[str, float]) -> dict[str, float]:
+        """Calculate derived flows from the 5 core sensors all platforms provide.
+
+        Every platform provides these lifetime sensors:
+          battery_charged, battery_discharged, solar_production,
+          import_from_grid, export_to_grid
+
+        Everything else is derived via energy balance so the calculation
+        is platform-independent:
+          load  = solar + import + battery_out - battery_in - export
+          system_production = solar  (fallback when no direct sensor)
+          self_consumption  = load - import  (energy consumed from own production)
+        """
+        solar_production = flows.get("solar_production", 0)
+        battery_charged = flows.get("battery_charged", 0)
+        battery_discharged = flows.get("battery_discharged", 0)
+        export_to_grid = flows.get("export_to_grid", 0)
+        load_consumption = flows.get("load_consumption", 0)
+        import_from_grid = flows.get("import_from_grid", 0)
+
+        # Derive load_consumption when no direct sensor is available.
+        # GEN4 Growatt Modbus and SolaX Native lack a native register.
+        # Energy balance: load = solar + import + battery_out - battery_in - export
+        if load_consumption == 0 and (
+            solar_production > 0 or import_from_grid > 0 or battery_discharged > 0
+        ):
+            load_consumption = max(
+                0,
+                solar_production
+                + import_from_grid
+                + battery_discharged
+                - battery_charged
+                - export_to_grid,
+            )
+            flows["load_consumption"] = load_consumption
+
+        # Derive system_production when no direct sensor is available.
+        # GEN3 Growatt and SolaX Native lack a total_yield register.
+        system_production = flows.get("system_production", 0)
+        if system_production == 0 and solar_production > 0:
+            flows["system_production"] = solar_production
+
+        # Derive self_consumption: energy consumed from own production.
+        self_consumption = flows.get("self_consumption", 0)
+        if self_consumption == 0 and load_consumption > 0:
+            self_consumption = max(0, load_consumption - import_from_grid)
+            flows["self_consumption"] = self_consumption
+
+        solar_to_battery = max(
+            0,
+            solar_production - export_to_grid - self_consumption + battery_discharged,
+        )
+        solar_to_battery = min(solar_to_battery, battery_charged, solar_production)
+
+        flows["solar_to_battery"] = solar_to_battery
+        flows["grid_to_battery"] = max(0, battery_charged - solar_to_battery)
+
+        flows["aux_load"] = flows.get("aux_load", 0.0)
+        return flows

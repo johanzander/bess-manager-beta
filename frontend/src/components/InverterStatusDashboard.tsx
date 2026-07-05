@@ -1013,6 +1013,7 @@ const InverterStatusDashboard: React.FC = () => {
                     : platform === 'solax_modbus_native' ? 'SolaX Modbus'
                     : platform === 'solax_modbus_growatt_min' ? 'SolaX/Growatt MIN'
                     : platform === 'solax_modbus_growatt_sph' ? 'SolaX/Growatt SPH'
+                    : platform === 'solis_modbus' ? 'Solis Modbus'
                     : platform}
                 </span>
               </div>

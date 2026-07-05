@@ -36,6 +36,7 @@ from .models import (
     DecisionData,
     EconomicData,
     EconomicSummary,
+    EnergyData,
     PeriodData,
     infer_intent_from_flows,
 )
@@ -56,6 +57,7 @@ from .settings import (
 )
 from .solax_controller import SolaxController
 from .solax_modbus_growatt_controller import SolaxModbusGrowattController
+from .solis_modbus_controller import SolisModbusController
 from .time_utils import (
     format_period,
     get_period_count,
@@ -214,6 +216,7 @@ class BatterySystemManager:
         "solax_modbus_growatt_min",
         "solax_modbus_growatt_sph",
         "solax_modbus_native",
+        "solis_modbus",
     }
 
     _INVERTER_TYPE_TO_PLATFORM: ClassVar[dict[str, str]] = {
@@ -222,6 +225,7 @@ class BatterySystemManager:
         "solax_modbus_growatt_sph": "solax_modbus_growatt_sph",
         "growatt_server_sph": "growatt_server_sph",
         "solax_modbus_native": "solax_modbus_native",
+        "solis_modbus": "solis_modbus",
         # Legacy values stored in growatt.inverter_type
         "MIN": "growatt_server_min",
         "SPH": "growatt_server_sph",
@@ -274,6 +278,8 @@ class BatterySystemManager:
             return GrowattSphController(battery_settings=self.battery_settings)
         if self.inverter_platform == "solax_modbus_native":
             return SolaxController(battery_settings=self.battery_settings)
+        if self.inverter_platform == "solis_modbus":
+            return SolisModbusController(battery_settings=self.battery_settings)
         if self.inverter_platform in (
             "solax_modbus_growatt_min",
             "solax_modbus_growatt_sph",
@@ -348,6 +354,37 @@ class BatterySystemManager:
         if provider == "nordpool_official":
             nordpool_official_config = config["nordpool_official"]
             config_entry_id = nordpool_official_config["config_entry_id"]
+            try:
+                official_service_available = controller.has_service(
+                    "nordpool", "get_prices_for_date"
+                )
+            except Exception as e:
+                official_service_available = True
+                logger.warning("Could not inspect Nordpool services: %s", e)
+
+            if not official_service_available:
+                hacs_config = config.get("nordpool_hacs", {})
+                hacs_entity = hacs_config.get("entity") or (
+                    controller.discover_nordpool_hacs_entity()
+                )
+                if hacs_entity:
+                    logger.warning(
+                        "Configured provider is nordpool_official, but HA does not "
+                        "expose nordpool.get_prices_for_date. Falling back to HACS "
+                        "Nordpool entity %s",
+                        hacs_entity,
+                    )
+                    return HomeAssistantSource(
+                        controller,
+                        vat_multiplier=self.price_settings.vat_multiplier,
+                        entity=hacs_entity,
+                    )
+                logger.warning(
+                    "Configured provider is nordpool_official, but HA does not "
+                    "expose nordpool.get_prices_for_date and no HACS Nordpool "
+                    "entity was discovered"
+                )
+
             price_source = OfficialNordpoolSource(
                 controller,
                 config_entry_id,
@@ -746,8 +783,10 @@ class BatterySystemManager:
         """Fetch and initialize historical data using quarterly resolution."""
         if not is_influxdb_configured():
             logger.info(
-                "InfluxDB is not configured — skipping historical data backfill"
+                "InfluxDB is not configured — using HA Recorder statistics for "
+                "historical data backfill"
             )
+            self._fetch_historical_data_from_ha_statistics(status_callback)
             return
 
         try:
@@ -865,6 +904,209 @@ class BatterySystemManager:
 
         except Exception as e:
             logger.error(f"Failed to initialize historical data: {e}")
+
+    def _resolve_statistic_id_for_sensor_key(self, sensor_key: str) -> str | None:
+        """Resolve a BESS sensor key to a Home Assistant statistic_id."""
+        try:
+            entity_id, _ = self._controller._resolve_entity_id(sensor_key)
+        except Exception:
+            return None
+        if not entity_id.startswith("sensor."):
+            entity_id = f"sensor.{entity_id}"
+
+        try:
+            return self._controller.find_statistic_id(entity_id) or entity_id
+        except Exception:
+            return entity_id
+
+    @staticmethod
+    def _hour_from_ha_stat_start(start_value, tz) -> int | None:
+        from datetime import timezone
+
+        if start_value is None:
+            return None
+        try:
+            if isinstance(start_value, (int, float)):
+                ts = start_value / 1000 if start_value > 1e12 else start_value
+                dt = datetime.fromtimestamp(ts, tz=timezone.utc).astimezone(tz)
+            else:
+                dt = datetime.fromisoformat(str(start_value)).astimezone(tz)
+            return dt.hour
+        except (ValueError, TypeError, OverflowError):
+            return None
+
+    def _fetch_historical_data_from_ha_statistics(self, status_callback=None) -> None:
+        """Backfill today's completed periods from HA Recorder energy statistics.
+
+        This is a lower-resolution fallback for installations without InfluxDB.
+        HA Recorder provides hourly ``change`` values for total_increasing energy
+        sensors; each hourly value is distributed evenly over the four
+        quarter-hour periods so the dashboard has usable actuals after restart.
+        """
+        if self._controller is None:
+            logger.warning("Cannot backfill HA statistics: controller unavailable")
+            return
+
+        try:
+            now = time_utils.now()
+            current_hour = now.hour
+            current_period = current_hour * 4
+            if current_period <= 0:
+                logger.info("No completed full hours for HA statistics backfill")
+                return
+
+            sensor_keys = {
+                "solar_production": "lifetime_solar_energy",
+                "home_consumption": "lifetime_load_consumption",
+                "grid_imported": "lifetime_import_from_grid",
+                "grid_exported": "lifetime_export_to_grid",
+                "battery_charged": "lifetime_battery_charged",
+                "battery_discharged": "lifetime_battery_discharged",
+            }
+
+            stat_to_flow: dict[str, str] = {}
+            for flow_name, sensor_key in sensor_keys.items():
+                statistic_id = self._resolve_statistic_id_for_sensor_key(sensor_key)
+                if statistic_id:
+                    stat_to_flow[statistic_id] = flow_name
+
+            required_flows = {
+                "solar_production",
+                "home_consumption",
+                "grid_imported",
+                "grid_exported",
+            }
+            available_flows = set(stat_to_flow.values())
+            if not required_flows.issubset(available_flows):
+                logger.info(
+                    "HA statistics backfill skipped; missing required statistic "
+                    "flows: %s",
+                    sorted(required_flows - available_flows),
+                )
+                return
+
+            from datetime import time
+
+            tz = time_utils.TIMEZONE
+            today = time_utils.today()
+            start_dt = datetime.combine(today, time(0, 0), tzinfo=tz)
+            end_dt = datetime.combine(today, time(current_hour, 0), tzinfo=tz)
+
+            result = self._controller.get_statistics_during_period(
+                statistic_ids=list(stat_to_flow.keys()),
+                start_time=start_dt.isoformat(),
+                end_time=end_dt.isoformat(),
+                period="hour",
+                types=["change"],
+            )
+
+            hourly: dict[int, dict[str, float]] = {
+                hour: {
+                    "solar_production": 0.0,
+                    "home_consumption": 0.0,
+                    "grid_imported": 0.0,
+                    "grid_exported": 0.0,
+                    "battery_charged": 0.0,
+                    "battery_discharged": 0.0,
+                }
+                for hour in range(current_hour)
+            }
+
+            for statistic_id, entries in result.items():
+                flow_name = stat_to_flow.get(statistic_id)
+                if not flow_name:
+                    continue
+                for entry in entries or []:
+                    hour = self._hour_from_ha_stat_start(entry.get("start"), tz)
+                    change = entry.get("change")
+                    if hour is None or hour not in hourly or change is None:
+                        continue
+                    hourly[hour][flow_name] = max(0.0, float(change))
+
+            try:
+                soc = float(self._controller.get_battery_soc())
+            except Exception:
+                soc = 0.0
+
+            try:
+                buy_prices, sell_prices = self.price_manager.get_available_prices()
+            except Exception as e:
+                logger.warning("Could not get prices for HA statistics backfill: %s", e)
+                buy_prices, sell_prices = [], []
+
+            stored = 0
+            for hour in range(current_hour):
+                if status_callback:
+                    status_callback(
+                        f"Fetching HA statistics historical data ({hour}/{current_hour}h)..."
+                    )
+
+                hour_data = hourly[hour]
+                if all(value <= 0.0 for value in hour_data.values()):
+                    continue
+
+                for quarter in range(4):
+                    period = hour * 4 + quarter
+                    flow_values = {
+                        key: value / 4.0 for key, value in hour_data.items()
+                    }
+                    energy_data = EnergyData(
+                        solar_production=flow_values["solar_production"],
+                        home_consumption=flow_values["home_consumption"],
+                        battery_charged=flow_values["battery_charged"],
+                        battery_discharged=flow_values["battery_discharged"],
+                        grid_imported=flow_values["grid_imported"],
+                        grid_exported=flow_values["grid_exported"],
+                        battery_soe_start=soc,
+                        battery_soe_end=soc,
+                    )
+
+                    buy_price = buy_prices[period] if period < len(buy_prices) else 0.0
+                    sell_price = (
+                        sell_prices[period] if period < len(sell_prices) else 0.0
+                    )
+                    battery_cycle_cost = (
+                        energy_data.battery_charged
+                        * self.battery_settings.cycle_cost_per_kwh
+                    )
+                    economic_data = EconomicData.from_energy_data(
+                        energy_data=energy_data,
+                        buy_price=buy_price,
+                        sell_price=sell_price,
+                        battery_cycle_cost=battery_cycle_cost,
+                    )
+                    observed = infer_intent_from_flows(
+                        energy_data.battery_net_change, energy_data
+                    )
+                    self.historical_store.record_period(
+                        period,
+                        PeriodData(
+                            period=period,
+                            energy=energy_data,
+                            timestamp=start_dt + timedelta(minutes=15 * period),
+                            data_source="ha_statistics",
+                            economic=economic_data,
+                            decision=DecisionData(
+                                strategic_intent=self._get_planned_intent_for_period(
+                                    period
+                                )
+                                or "IDLE",
+                                observed_intent=observed,
+                            ),
+                        ),
+                    )
+                    stored += 1
+
+            if stored:
+                self.sensor_collector.warm_readings_cache()
+                logger.info(
+                    "HA statistics backfill stored %d quarter-hour periods", stored
+                )
+            else:
+                logger.info("HA statistics backfill found no usable hourly data")
+
+        except Exception as e:
+            logger.warning("HA statistics historical backfill failed: %s", e)
 
     def _fetch_predictions(self) -> None:
         """Fetch consumption and solar predictions and store them."""

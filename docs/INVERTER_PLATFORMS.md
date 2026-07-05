@@ -1,6 +1,6 @@
 # Inverter Platforms
 
-BESS Manager supports four inverter platform configurations. Each combines a
+BESS Manager supports six inverter platform configurations. Each combines a
 specific inverter hardware family with a Home Assistant integration for
 communication.
 
@@ -13,6 +13,7 @@ communication.
 | Growatt SPH (Cloud) | Growatt SPH | [Growatt Server](https://www.home-assistant.io/integrations/growatt_server/) | Cloud API | AC charge/discharge periods | — |
 | Growatt MIX/SPH (Local) | Growatt MIX/SPA/SPH | [solax_modbus](https://github.com/wills106/homeassistant-solax-modbus) Growatt plugin | Local Modbus | Mode-specific time slots | GEN3 |
 | SolaX | SolaX hybrid | [solax_modbus](https://github.com/wills106/homeassistant-solax-modbus) | Local Modbus | VPP active-power commands | — |
+| Solis | Solis hybrid | [solis_modbus](https://github.com/Pho3niX90/solis_modbus) | Local Modbus | Grid TOU charge/discharge slots | — |
 
 > **solax_modbus generation mapping:** The `wills106/homeassistant-solax-modbus`
 > Growatt plugin classifies inverters by generation. GEN4 = MIN/MOD/MID/TL-X
@@ -34,7 +35,7 @@ is new.
 | Transport | HA integration(s) | Mechanism | Implemented today | Model controller(s) |
 |-----------|-------------------|-----------|-------------------|---------------------|
 | **TX-Cloud** | `growatt_server` | Vendor cloud API via HA **service calls** | ✅ | `GrowattMinController`, `GrowattSphController` |
-| **TX-Modbus** | `solax_modbus` (multi-brand: SolaX, Solis, Growatt, Sofar, AlphaESS, …) | Local Modbus **entity writes** (select/number/button) | ✅ | `SolaxModbusGrowattController`, `SolaxController` |
+| **TX-Modbus** | `solax_modbus`, `solis_modbus` | Local Modbus **entity writes** (select/number/switch/time/button) | ✅ | `SolaxModbusGrowattController`, `SolaxController`, `SolisModbusController` |
 | **TX-Vendor-service** | `huawei_solar` (and similar) | Local vendor integration: entity writes **+** ephemeral **service calls** (`forcible_charge`) | ❌ not yet | *(would model on `SolaxController` for the ephemeral half)* |
 | **TX-REST / TX-MQTT** | GivTCP, Solar Assistant, Sofar2mqtt | REST API / MQTT | ❌ not planned | — |
 
@@ -46,7 +47,7 @@ serves SolaX, Solis, Growatt, Sofar, etc. via per-brand register/entity names.
 | Scheduling model | Description | Implemented example |
 |------------------|-------------|---------------------|
 | **SM-TOU-numbered** | Persistent **numbered** TOU slots (start/end/mode) | Growatt MIN (cloud & GEN4 single-segment) |
-| **SM-Period-lists** | Persistent **charge/discharge period lists** (≤N each), power/SOC in the write | Growatt SPH (cloud) |
+| **SM-Period-lists** | Persistent **charge/discharge period lists** (≤N each), power/SOC in the write | Growatt SPH (cloud), Solis Modbus |
 | **SM-Mode-slots** | Persistent **mode-specific** time slots | Growatt MIX/SPH GEN3 (monitoring-only today) |
 | **SM-Ephemeral** | **No persistent schedule** — push a duration-bounded command that auto-expires | SolaX VPP; Huawei `forcible_charge` would land here |
 
@@ -58,7 +59,7 @@ declares which it supports, mapped to BESS sensor keys): **charge window**
 **reserve / discharge-stop SOC** · **charge rate** · **discharge rate** ·
 **grid-charge enable**.
 
-### The five existing platforms as coordinates
+### The six existing platforms as coordinates
 
 | Platform | Transport | Scheduling model | Controller | Detection marker / service | Suffix map |
 |----------|-----------|------------------|------------|----------------------------|-----------|
@@ -67,26 +68,15 @@ declares which it supports, mapped to BESS sensor keys): **charge window**
 | `solax_modbus_growatt_min` | TX-Modbus | SM-TOU-numbered (single-segment) | `SolaxModbusGrowattController` | `_GROWATT_TOU_MARKER_SUFFIX` (`time_1_enabled`) | `SOLAX_GROWATT_MIN_SUFFIX_MAP` |
 | `solax_modbus_growatt_sph` | TX-Modbus | SM-Mode-slots (GEN3, monitoring-only) | `SolaxModbusGrowattController` | `_GROWATT_GEN3_MARKER_SUFFIX` | `SOLAX_GROWATT_SPH_SUFFIX_MAP` |
 | `solax_modbus_native` | TX-Modbus | SM-Ephemeral (VPP) | `SolaxController` | `_SOLAX_NATIVE_MARKER_SUFFIX` (`remotecontrol_power_control`) | `SOLAX_NATIVE_SUFFIX_MAP` |
+| `solis_modbus` | TX-Modbus | SM-Period-lists | `SolisModbusController` | `_SOLIS_TOU_MARKER_SUFFIX` (`solis_modbus_inverter_tou_v2_switch`) | `SOLIS_SUFFIX_MAP` |
 
 ### Worked examples for new inverters
 
-- **Solis** (issue #130) — same **scheduling model** (persistent timed
-  charge/discharge slots + charge/discharge current) regardless of integration,
-  but Solis has several HA integrations across **both** transports. We support
-  **one of two** (chosen per the reporter's actual setup; **`solax_modbus` is the
-  default priority** because we already support that transport):
-  - **`solax_modbus`** (TX-Modbus, local; 491★ multi-brand, the community
-    standard) → **most additive**: new `SolisController` + `SOLIS_SUFFIX_MAP` + a
-    detection branch **before** the `solax_modbus_native` fallback. No new
-    transport, no ABC change.
-  - **`solis-cloud-control`** (TX-Cloud, SolisCloud Control API; easiest
-    onboarding, no wiring, but a young integration) → adds a **new TX-Cloud
-    domain** (detection branch + cloud service helpers), like Growatt cloud.
-    Treat as **experimental**.
-
-  *Not supported:* `solis-sensor` (monitoring-only) and `Pho3niX90/solis_modbus`
-  (redundant with `solax_modbus`'s local niche). **Decision: ask the reporter
-  which of the two they run, implement that one, default to `solax_modbus`.**
+- **Solis** — implemented for `Pho3niX90/solis_modbus` as
+  `solis_modbus`. BESS writes the integration's Grid Time of Use v2 charge and
+  discharge slots through HA `time`, `switch`, and `number` entities. Charge and
+  discharge current are written as a percentage of each Number entity's maximum,
+  so LV and HV Solis models can use their integration-provided limits.
 - **Huawei** = **TX-Vendor-service (NEW)** × SM-Ephemeral (`forcible_charge`,
   plus a persistent TOU working-mode). Needs a new `huawei_solar` transport
   branch in detection + a `forcible_charge` service helper + a `HuaweiController`
@@ -217,6 +207,33 @@ button.press(trigger)
 ```
 
 **Idle/solar mode:** Disables VPP, inverter reverts to self-use.
+
+### Solis — `solis_modbus`
+
+Solis hybrid inverters use persistent Grid Time of Use v2 charge and discharge
+slots. BESS groups strategic intents into up to 6 charge windows and 6 discharge
+windows, writes their start/end `time` entities, toggles each period switch, and
+sets current/SOC `number` entities.
+
+**Schedule writes:**
+```
+switch.turn_on(self_use_mode)
+switch.turn_on(time_of_use)
+switch.turn_on/off(allow_grid_to_charge)
+time.set_value(charge/discharge start/end)
+number.set_value(charge/discharge current, cutoff SOC)
+switch.turn_on/off(charge/discharge period enabled)
+```
+
+Charge/discharge currents are scaled from BESS percentages against the HA Number
+entity's configured maximum, so model-specific current limits remain owned by
+the Solis integration.
+
+**Grid power monitoring:** BESS supports either a signed net-grid sensor on
+`import_power` (positive import, negative export) or separate `import_power` and
+`export_power` sensors. For Solis systems where the inverter net-grid register
+does not match the utility meter direction, map a meter/Pulse export sensor to
+`export_power` and a positive import sensor to `import_power`.
 
 ---
 

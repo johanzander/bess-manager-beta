@@ -1,0 +1,129 @@
+{
+  "name": "historical_2025_01_13_night_low_no_solar",
+  "description": "Historical night low price pattern (2025-01-13) without solar production",
+  "base_prices": [
+    0.477,
+    0.447,
+    0.45,
+    0.438,
+    0.433,
+    0.422,
+    0.434,
+    0.805,
+    1.18,
+    0.654,
+    0.454,
+    0.441,
+    0.433,
+    0.425,
+    0.41,
+    0.399,
+    0.402,
+    0.401,
+    0.379,
+    0.347,
+    0.067,
+    0.023,
+    0.018,
+    0.0
+  ],
+  "home_consumption": [
+    5.2,
+    5.2,
+    5.2,
+    5.2,
+    5.2,
+    5.2,
+    5.2,
+    5.2,
+    5.2,
+    5.2,
+    5.2,
+    5.2,
+    5.2,
+    5.2,
+    5.2,
+    5.2,
+    5.2,
+    5.2,
+    5.2,
+    5.2,
+    5.2,
+    5.2,
+    5.2,
+    5.2
+  ],
+  "solar_production": [
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0
+  ],
+  "battery": {
+    "initial_soe": 3.0,
+    "min_soe_kwh": 3.0,
+    "max_soe_kwh": 30.0,
+    "efficiency_charge": 1.0,
+    "efficiency_discharge": 1.0,
+    "cycle_cost_per_kwh": 0.4,
+    "max_charge_power_kw": 6.0,
+    "max_discharge_power_kw": 6.0
+  },
+  "expected_results": {
+    "base_cost": 205.6275,
+    "battery_solar_cost": 202.6295,
+    "base_to_battery_solar_savings": 2.998,
+    "base_to_battery_solar_savings_pct": 1.458,
+    "total_charged": 12.0,
+    "total_discharged": 12.0
+  },
+  "expected_results_original": {
+    "base_cost": 51.68,
+    "battery_solar_cost": 50.48,
+    "base_to_battery_solar_savings": 1.2,
+    "base_to_battery_solar_savings_pct": 2.3,
+    "total_charged": 6.0,
+    "total_discharged": 5.2
+  },
+  "price_data": {
+    "markup_rate": 0.08,
+    "vat_multiplier": 1.25,
+    "additional_costs": 1.03,
+    "tax_reduction": 0.0
+  },
+  "expected_behavior": {
+    "description": "Night lows without solar: small spread so mostly idle, some grid charging",
+    "intents_present": [
+      "IDLE"
+    ],
+    "intents_absent": [
+      "SOLAR_STORAGE",
+      "BATTERY_EXPORT"
+    ],
+    "savings_positive": true,
+    "constraints": {
+      "soe_within_bounds": true,
+      "power_within_limits": true
+    }
+  }
+}

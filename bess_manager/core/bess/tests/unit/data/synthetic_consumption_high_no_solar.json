@@ -1,0 +1,122 @@
+{
+  "name": "synthetic_consumption_high_no_solar",
+  "description": "Autumn price pattern with moderate prices with High consumption home and No solar production",
+  "base_prices": [
+    0.8,
+    0.7,
+    0.6,
+    0.5,
+    0.5,
+    0.7,
+    1.0,
+    1.3,
+    1.5,
+    1.4,
+    1.3,
+    1.2,
+    1.1,
+    1.0,
+    1.2,
+    1.4,
+    1.7,
+    2.0,
+    2.1,
+    1.9,
+    1.7,
+    1.3,
+    1.1,
+    0.9
+  ],
+  "home_consumption": [
+    1.5,
+    1.3,
+    1.2,
+    1.0,
+    1.0,
+    1.5,
+    3.0,
+    5.0,
+    6.0,
+    4.0,
+    3.0,
+    4.0,
+    5.0,
+    3.5,
+    4.0,
+    5.0,
+    7.0,
+    9.0,
+    10.0,
+    9.0,
+    7.0,
+    5.0,
+    3.0,
+    2.0
+  ],
+  "solar_production": [
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0
+  ],
+  "battery": {
+    "initial_soe": 3.0,
+    "min_soe_kwh": 3.0,
+    "max_soe_kwh": 30.0,
+    "efficiency_charge": 0.95,
+    "efficiency_discharge": 0.95,
+    "cycle_cost_per_kwh": 0.4,
+    "max_charge_power_kw": 6.0,
+    "max_discharge_power_kw": 6.0
+  },
+  "price_data": {
+    "markup_rate": 0.0,
+    "vat_multiplier": 1.0,
+    "additional_costs": 0.0,
+    "tax_reduction": 0.0
+  },
+  "expected_results": {
+    "base_cost": 149.98,
+    "battery_solar_cost": 129.0347,
+    "base_to_battery_solar_savings": 20.9453,
+    "base_to_battery_solar_savings_pct": 13.9654,
+    "total_charged": 28.4,
+    "total_discharged": 25.6
+  },
+  "expected_behavior": {
+    "description": "High consumption without solar: grid-charge off-peak, support heavy loads",
+    "intents_present": [
+      "GRID_CHARGING",
+      "LOAD_SUPPORT"
+    ],
+    "intents_absent": [
+      "SOLAR_STORAGE",
+      "BATTERY_EXPORT"
+    ],
+    "savings_positive": true,
+    "constraints": {
+      "soe_within_bounds": true,
+      "power_within_limits": true
+    }
+  }
+}

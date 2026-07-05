@@ -4,6 +4,8 @@ export interface SensorDef {
   key: string;
   label: string;
   required: boolean;
+  helpText?: string;
+  exampleTemplate?: string;
 }
 
 export interface SensorGroup {
@@ -27,6 +29,7 @@ export const INVERTER_INTEGRATION_IDS: Record<string, string> = {
   solax_modbus_growatt_min: 'solax_modbus_growatt_min',
   solax_modbus_growatt_sph: 'solax_modbus_growatt_sph',
   solax_modbus_native: 'solax_modbus_native',
+  solis_modbus: 'solis_modbus',
 };
 
 // Platform IDs are now used consistently at all layers — no conversion needed.
@@ -38,6 +41,7 @@ export const VALID_PLATFORMS = [
   'solax_modbus_growatt_min',
   'solax_modbus_growatt_sph',
   'solax_modbus_native',
+  'solis_modbus',
 ] as const;
 
 export type PlatformId = typeof VALID_PLATFORMS[number];
@@ -55,6 +59,7 @@ export interface PerPlatformSensors {
   solax_modbus_growatt_min: Record<string, string>;
   solax_modbus_growatt_sph: Record<string, string>;
   solax_modbus_native: Record<string, string>;
+  solis_modbus: Record<string, string>;
   shared: Record<string, string>;
 }
 
@@ -73,6 +78,7 @@ export function emptyPerPlatformSensors(platform = ''): PerPlatformSensors {
     solax_modbus_growatt_min: {},
     solax_modbus_growatt_sph: {},
     solax_modbus_native: {},
+    solis_modbus: {},
     shared: {},
   };
 }
@@ -330,6 +336,134 @@ export const INTEGRATIONS: IntegrationDef[] = [
           { key: 'lifetime_import_from_grid', label: 'Grid Import Total', required: false },
           { key: 'lifetime_export_to_grid', label: 'Grid Export Total', required: false },
           { key: 'lifetime_load_consumption', label: 'Total Load', required: false },
+        ],
+      },
+    ],
+  },
+  {
+    id: 'solis_modbus',
+    name: 'Solis Modbus',
+    required: true,
+    description: 'Solis hybrid inverter controlled locally via the Pho3niX90 solis_modbus integration',
+    sensorGroups: [
+      {
+        name: 'Battery Monitoring',
+        sensors: [
+          { key: 'battery_soc', label: 'Battery SOC', required: true },
+          { key: 'battery_charge_power', label: 'Battery Charge Power', required: true },
+          { key: 'battery_discharge_power', label: 'Battery Discharge Power', required: true },
+        ],
+      },
+      {
+        name: 'Solis Control',
+        sensors: [
+          { key: 'solis_self_use_mode', label: 'Self-Use Mode', required: true },
+          { key: 'solis_tou_mode', label: 'Time of Use Mode', required: true },
+          { key: 'grid_charge', label: 'Allow Grid to Charge Battery', required: true },
+          { key: 'battery_charging_power_rate', label: 'Charge Current Slot 1', required: true },
+          { key: 'battery_discharging_power_rate', label: 'Discharge Current Slot 1', required: true },
+          { key: 'battery_charge_stop_soc', label: 'Charge Cutoff SOC Slot 1', required: true },
+          { key: 'battery_discharge_stop_soc', label: 'Discharge Cutoff SOC Slot 1', required: true },
+        ],
+      },
+      {
+        name: 'Solis TOU Slot 1',
+        sensors: [
+          { key: 'solis_tou_charge_enabled_1', label: 'Charge Period 1 Enable', required: true },
+          { key: 'solis_tou_charge_start_1', label: 'Charge Period 1 Start', required: true },
+          { key: 'solis_tou_charge_end_1', label: 'Charge Period 1 End', required: true },
+          { key: 'solis_tou_discharge_enabled_1', label: 'Discharge Period 1 Enable', required: true },
+          { key: 'solis_tou_discharge_start_1', label: 'Discharge Period 1 Start', required: true },
+          { key: 'solis_tou_discharge_end_1', label: 'Discharge Period 1 End', required: true },
+        ],
+      },
+      {
+        name: 'Solis TOU Slots 2-6',
+        sensors: [
+          { key: 'solis_tou_charge_enabled_2', label: 'Charge Period 2 Enable', required: true },
+          { key: 'solis_tou_charge_start_2', label: 'Charge Period 2 Start', required: true },
+          { key: 'solis_tou_charge_end_2', label: 'Charge Period 2 End', required: true },
+          { key: 'solis_tou_discharge_enabled_2', label: 'Discharge Period 2 Enable', required: true },
+          { key: 'solis_tou_discharge_start_2', label: 'Discharge Period 2 Start', required: true },
+          { key: 'solis_tou_discharge_end_2', label: 'Discharge Period 2 End', required: true },
+          { key: 'solis_tou_charge_current_2', label: 'Charge Current Slot 2', required: true },
+          { key: 'solis_tou_discharge_current_2', label: 'Discharge Current Slot 2', required: true },
+          { key: 'solis_tou_charge_stop_soc_2', label: 'Charge Cutoff SOC Slot 2', required: true },
+          { key: 'solis_tou_discharge_stop_soc_2', label: 'Discharge Cutoff SOC Slot 2', required: true },
+          { key: 'solis_tou_charge_enabled_3', label: 'Charge Period 3 Enable', required: true },
+          { key: 'solis_tou_charge_start_3', label: 'Charge Period 3 Start', required: true },
+          { key: 'solis_tou_charge_end_3', label: 'Charge Period 3 End', required: true },
+          { key: 'solis_tou_discharge_enabled_3', label: 'Discharge Period 3 Enable', required: true },
+          { key: 'solis_tou_discharge_start_3', label: 'Discharge Period 3 Start', required: true },
+          { key: 'solis_tou_discharge_end_3', label: 'Discharge Period 3 End', required: true },
+          { key: 'solis_tou_charge_current_3', label: 'Charge Current Slot 3', required: true },
+          { key: 'solis_tou_discharge_current_3', label: 'Discharge Current Slot 3', required: true },
+          { key: 'solis_tou_charge_stop_soc_3', label: 'Charge Cutoff SOC Slot 3', required: true },
+          { key: 'solis_tou_discharge_stop_soc_3', label: 'Discharge Cutoff SOC Slot 3', required: true },
+          { key: 'solis_tou_charge_enabled_4', label: 'Charge Period 4 Enable', required: true },
+          { key: 'solis_tou_charge_start_4', label: 'Charge Period 4 Start', required: true },
+          { key: 'solis_tou_charge_end_4', label: 'Charge Period 4 End', required: true },
+          { key: 'solis_tou_discharge_enabled_4', label: 'Discharge Period 4 Enable', required: true },
+          { key: 'solis_tou_discharge_start_4', label: 'Discharge Period 4 Start', required: true },
+          { key: 'solis_tou_discharge_end_4', label: 'Discharge Period 4 End', required: true },
+          { key: 'solis_tou_charge_current_4', label: 'Charge Current Slot 4', required: true },
+          { key: 'solis_tou_discharge_current_4', label: 'Discharge Current Slot 4', required: true },
+          { key: 'solis_tou_charge_stop_soc_4', label: 'Charge Cutoff SOC Slot 4', required: true },
+          { key: 'solis_tou_discharge_stop_soc_4', label: 'Discharge Cutoff SOC Slot 4', required: true },
+          { key: 'solis_tou_charge_enabled_5', label: 'Charge Period 5 Enable', required: true },
+          { key: 'solis_tou_charge_start_5', label: 'Charge Period 5 Start', required: true },
+          { key: 'solis_tou_charge_end_5', label: 'Charge Period 5 End', required: true },
+          { key: 'solis_tou_discharge_enabled_5', label: 'Discharge Period 5 Enable', required: true },
+          { key: 'solis_tou_discharge_start_5', label: 'Discharge Period 5 Start', required: true },
+          { key: 'solis_tou_discharge_end_5', label: 'Discharge Period 5 End', required: true },
+          { key: 'solis_tou_charge_current_5', label: 'Charge Current Slot 5', required: true },
+          { key: 'solis_tou_discharge_current_5', label: 'Discharge Current Slot 5', required: true },
+          { key: 'solis_tou_charge_stop_soc_5', label: 'Charge Cutoff SOC Slot 5', required: true },
+          { key: 'solis_tou_discharge_stop_soc_5', label: 'Discharge Cutoff SOC Slot 5', required: true },
+          { key: 'solis_tou_charge_enabled_6', label: 'Charge Period 6 Enable', required: true },
+          { key: 'solis_tou_charge_start_6', label: 'Charge Period 6 Start', required: true },
+          { key: 'solis_tou_charge_end_6', label: 'Charge Period 6 End', required: true },
+          { key: 'solis_tou_discharge_enabled_6', label: 'Discharge Period 6 Enable', required: true },
+          { key: 'solis_tou_discharge_start_6', label: 'Discharge Period 6 Start', required: true },
+          { key: 'solis_tou_discharge_end_6', label: 'Discharge Period 6 End', required: true },
+          { key: 'solis_tou_charge_current_6', label: 'Charge Current Slot 6', required: true },
+          { key: 'solis_tou_discharge_current_6', label: 'Discharge Current Slot 6', required: true },
+          { key: 'solis_tou_charge_stop_soc_6', label: 'Charge Cutoff SOC Slot 6', required: true },
+          { key: 'solis_tou_discharge_stop_soc_6', label: 'Discharge Cutoff SOC Slot 6', required: true },
+        ],
+      },
+      {
+        name: 'Power Monitoring',
+        sensors: [
+          { key: 'pv_power', label: 'PV Power', required: false },
+          { key: 'local_load_power', label: 'Household Load Power', required: false },
+          {
+            key: 'import_power',
+            label: 'Grid Power Net',
+            required: false,
+            helpText: 'Net power at the grid connection point. Positive values mean importing from the grid; negative values mean exporting to the grid. Unit must be W. This is not household load and not PV production. If your inverter only exposes separate import/export sensors, create a template sensor with import minus export.',
+            exampleTemplate: `template:
+  - sensor:
+      - name: "Grid Power Net"
+        unique_id: grid_power_net
+        unit_of_measurement: "W"
+        device_class: power
+        state_class: measurement
+        state: >
+          {% set import = states('sensor.grid_import_power') | float(0) %}
+          {% set export = states('sensor.grid_export_power') | float(0) %}
+          {{ (import - export) | round(0) }}`,
+          },
+          { key: 'export_power', label: 'Grid Export Power', required: false },
+        ],
+      },
+      {
+        name: 'Lifetime Energy',
+        sensors: [
+          { key: 'lifetime_solar_energy', label: 'PV Total Generation', required: false },
+          { key: 'lifetime_import_from_grid', label: 'Energy From Grid', required: false },
+          { key: 'lifetime_export_to_grid', label: 'Energy To Grid', required: false },
+          { key: 'lifetime_load_consumption', label: 'Household Load Total Energy', required: false },
         ],
       },
     ],

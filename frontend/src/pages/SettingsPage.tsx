@@ -300,16 +300,29 @@ const SettingsPage: React.FC = () => {
       // Only update discovery fields that actually changed.
       // Never overwrite user-configured price calculation fields
       // (vatMultiplier, markupRate, additionalCosts, taxReduction).
-      // Use area from matching integration: official if available,
-      // otherwise HACS custom — never mix the two.
-      const discoveredArea = d.nordpoolConfigEntryId
-        ? d.nordpoolArea : d.nordpoolCustomArea;
+      // Use official Nordpool only when the service action exists. HACS/custom
+      // Nordpool can also expose a config entry but has no get_prices_for_date.
+      const hasOfficialNordpool = !!d.nordpoolConfigEntryId && !!d.nordpoolOfficialServiceFound;
+      const hasCustomNordpool = !!d.nordpoolCustomEntity || !!d.nordpoolCustomArea;
+      const discoveredArea = hasOfficialNordpool
+        ? d.nordpoolArea : (d.nordpoolCustomArea || d.nordpoolArea);
 
       setPricingForm(f => {
         const next = { ...f };
         let changed = false;
+        const discoveredProvider = hasOfficialNordpool
+          ? 'nordpool_official'
+          : hasCustomNordpool
+            ? 'nordpool_hacs'
+            : undefined;
+        if (discoveredProvider && discoveredProvider !== f.provider) {
+          next.provider = discoveredProvider; changed = true;
+        }
         if (d.nordpoolConfigEntryId && d.nordpoolConfigEntryId !== f.nordpoolConfigEntryId) {
           next.nordpoolConfigEntryId = d.nordpoolConfigEntryId; changed = true;
+        }
+        if (d.nordpoolCustomEntity && d.nordpoolCustomEntity !== f.nordpoolEntity) {
+          next.nordpoolEntity = d.nordpoolCustomEntity; changed = true;
         }
         if (discoveredArea && discoveredArea !== f.area) {
           next.area = discoveredArea; changed = true;

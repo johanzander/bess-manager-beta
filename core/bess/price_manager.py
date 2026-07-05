@@ -13,6 +13,31 @@ from .exceptions import PriceDataUnavailableError, SystemConfigurationError
 logger = logging.getLogger(__name__)
 
 
+def normalize_prices_to_quarterly(prices: list[float]) -> list[float]:
+    """Normalize source prices to 15-minute periods.
+
+    Nordpool may expose either native quarter-hourly prices (92-100 values with
+    DST) or legacy hourly prices (23-25 values). The optimizer runs on
+    quarter-hourly periods, so hourly values are expanded to four quarters.
+    """
+    if not prices:
+        return []
+
+    count = len(prices)
+    if 92 <= count <= 100:
+        return prices
+
+    if 23 <= count <= 25:
+        return [price for price in prices for _ in range(4)]
+
+    raise PriceDataUnavailableError(
+        message=(
+            f"Unexpected price count: {count} periods. Expected 92-100 "
+            "quarter-hourly values or 23-25 hourly values with DST."
+        )
+    )
+
+
 class PriceSource:
     """Abstract base class for price sources.
 
@@ -168,22 +193,21 @@ class HomeAssistantSource(PriceSource):
             )
 
         try:
-            # Fetch sensor data — today and tomorrow attributes live on the same entity
-            sensor_data_all = self._fetch_sensor_attributes(self.entity)
+            prices = self._get_prices_from_entity(self.entity, target_date)
+            if prices:
+                return prices
 
-            # Try both attribute sets on the single sensor
-            for sensor_data, sensor_name in [
-                (sensor_data_all, "today"),
-                (sensor_data_all, "tomorrow"),
-            ]:
-                if not sensor_data:
-                    continue
-
-                prices = self._extract_prices_for_date(
-                    sensor_data, target_date, sensor_name
-                )
+            fallback_entity = self._discover_fallback_entity()
+            if fallback_entity and fallback_entity != self.entity:
+                prices = self._get_prices_from_entity(fallback_entity, target_date)
                 if prices:
-                    logger.debug(f"Found {target_date} prices in {sensor_name} sensor")
+                    logger.warning(
+                        "Configured Nordpool entity %s has no usable prices; "
+                        "using discovered entity %s instead",
+                        self.entity,
+                        fallback_entity,
+                    )
+                    self.entity = fallback_entity
                     return prices
 
             # No prices found
@@ -196,6 +220,33 @@ class HomeAssistantSource(PriceSource):
                 date=target_date,
                 message=f"Failed to get price data for {target_date}: {e}",
             ) from e
+
+    def _get_prices_from_entity(self, entity_id: str, target_date: date) -> list | None:
+        sensor_data_all = self._fetch_sensor_attributes(entity_id)
+
+        # Try both attribute sets on the single sensor
+        for sensor_data, sensor_name in [
+            (sensor_data_all, "today"),
+            (sensor_data_all, "tomorrow"),
+        ]:
+            if not sensor_data:
+                continue
+
+            prices = self._extract_prices_for_date(sensor_data, target_date, sensor_name)
+            if prices:
+                logger.debug("Found %s prices in %s", target_date, entity_id)
+                return prices
+
+        return None
+
+    def _discover_fallback_entity(self) -> str | None:
+        discover = getattr(self.ha_controller, "discover_nordpool_hacs_entity", None)
+        if not callable(discover):
+            return None
+        try:
+            return discover()
+        except Exception:
+            return None
 
     def _fetch_sensor_attributes(self, entity_id: str):
         """Fetch attributes from the specified Nordpool sensor entity.
@@ -277,40 +328,34 @@ class HomeAssistantSource(PriceSource):
             if actual_date != target_date:
                 return None
 
-            # Extract prices
-            prices = [float(entry["value"]) for entry in raw_data if "value" in entry]
+            # Extract prices. HACS/custom Nordpool versions use either
+            # ``value`` or ``price`` for raw entries.
+            prices = []
+            for entry in raw_data:
+                if "value" in entry:
+                    prices.append(float(entry["value"]))
+                elif "price" in entry:
+                    prices.append(float(entry["price"]))
 
             # Nordpool prices from Home Assistant include VAT - remove it
             # to standardize all price sources to return VAT-exclusive prices
             prices = [price / self.vat_multiplier for price in prices]
 
-            # Handle DST transitions
-            return self._handle_dst_transitions(prices)
+            return normalize_prices_to_quarterly(prices)
 
         except Exception:
             return None
 
     def _handle_dst_transitions(self, prices):
-        """Handle DST transitions for quarterly resolution (92-100 periods).
+        """Normalize hourly or quarterly prices to quarter-hourly resolution.
 
         Nordpool provides quarterly prices (15-minute intervals):
         - Normal day: 96 periods (24 hours x 4)
         - DST spring (23h): 92 periods
         - DST fall (25h): 100 periods
-
-        Returns prices as-is since Nordpool already provides quarterly resolution.
+        Legacy/hourly sources are expanded from 23-25 values to 92-100 values.
         """
-        if not prices:
-            return []
-
-        # Validate quarterly period count (92-100 for DST variations)
-        if 92 <= len(prices) <= 100:
-            return prices
-        else:
-            # Unexpected count - fail fast instead of guessing
-            raise PriceDataUnavailableError(
-                message=f"Unexpected price count: {len(prices)} periods. Expected 92-100 for quarterly resolution with DST."
-            )
+        return normalize_prices_to_quarterly(prices)
 
     def _get_sensor_diagnostic_info(self, sensor_data, sensor_name):
         """Get simple diagnostic information about sensor data availability."""

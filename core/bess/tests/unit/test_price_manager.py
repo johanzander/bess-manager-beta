@@ -229,6 +229,93 @@ def test_home_assistant_source_vat_parameter():
     assert round(prices_custom[0], 4) == round(2.0 / 1.20, 4)  # ~1.6667
 
 
+def test_home_assistant_source_expands_hourly_today_array_to_quarterly():
+    """Legacy hourly Nordpool arrays are expanded to 96 quarter-hour periods."""
+    mock_controller = MagicMock()
+    today_date = time_utils.today()
+
+    def mock_api_request(method, path):
+        return {"attributes": {"today": [float(i) for i in range(24)]}}
+
+    mock_controller._api_request = mock_api_request
+    source = HomeAssistantSource(
+        mock_controller,
+        vat_multiplier=1.25,
+        entity="sensor.nordpool_kwh_se3_sek_0_10_025",
+    )
+
+    prices = source.get_prices_for_date(today_date)
+
+    assert len(prices) == 96
+    assert prices[:4] == [0.0, 0.0, 0.0, 0.0]
+    assert prices[4:8] == [1.0, 1.0, 1.0, 1.0]
+
+
+def test_home_assistant_source_accepts_raw_price_key_quarterly():
+    """Some Nordpool raw entries use 'price' instead of 'value'."""
+    mock_controller = MagicMock()
+    today_date = time_utils.today()
+    raw_today_data = [
+        {
+            "start": f"{today_date.isoformat()}T{hour:02d}:{minute:02d}:00+01:00",
+            "price": 2.5,
+        }
+        for hour in range(24)
+        for minute in [0, 15, 30, 45]
+    ]
+
+    def mock_api_request(method, path):
+        return {"attributes": {"raw_today": raw_today_data}}
+
+    mock_controller._api_request = mock_api_request
+    source = HomeAssistantSource(
+        mock_controller,
+        vat_multiplier=1.25,
+        entity="sensor.nordpool_kwh_se3_sek_0_10_025",
+    )
+
+    prices = source.get_prices_for_date(today_date)
+
+    assert len(prices) == 96
+    assert prices[0] == 2.0
+
+
+def test_home_assistant_source_falls_back_from_empty_template_entity():
+    """A saved empty template helper must not block the real Nordpool sensor."""
+    mock_controller = MagicMock()
+    today_date = time_utils.today()
+    real_entity = "sensor.nordpool_kwh_se3_sek_3_10_025"
+    raw_today_data = [
+        {
+            "start": f"{today_date.isoformat()}T{hour:02d}:{minute:02d}:00+02:00",
+            "value": 2.5,
+        }
+        for hour in range(24)
+        for minute in [0, 15, 30, 45]
+    ]
+
+    def mock_api_request(method, path):
+        if "sensor.nordpool_energyprices_3" in path:
+            return {"attributes": {"prices": []}}
+        if real_entity in path:
+            return {"attributes": {"raw_today": raw_today_data}}
+        return None
+
+    mock_controller._api_request = mock_api_request
+    mock_controller.discover_nordpool_hacs_entity.return_value = real_entity
+    source = HomeAssistantSource(
+        mock_controller,
+        vat_multiplier=1.25,
+        entity="sensor.nordpool_energyprices_3",
+    )
+
+    prices = source.get_prices_for_date(today_date)
+
+    assert len(prices) == 96
+    assert prices[0] == 2.0
+    assert source.entity == real_entity
+
+
 def test_get_available_prices_today_only():
     """Should return today's prices at quarterly resolution when tomorrow unavailable."""
     mock_source = MockSource(

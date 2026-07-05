@@ -7,7 +7,7 @@ This is separate from core tests to maintain proper architecture boundaries.
 from datetime import datetime
 
 import pytest
-from api_dataclasses import APIDashboardHourlyData
+from api_dataclasses import APIDashboardHourlyData, APIRealTimePower
 
 from core.bess.models import DecisionData, EconomicData, EnergyData, PeriodData
 
@@ -85,6 +85,37 @@ class TestAPIConversion:
         expected_soc_end = (16.5 / battery_capacity) * 100
         assert abs(api_data.batterySocStart.value - expected_soc_start) < 0.01
         assert abs(api_data.batterySocEnd.value - expected_soc_end) < 0.01
+
+    def test_real_time_power_treats_negative_grid_import_as_export(self):
+        """Signed net-grid sensors should display export instead of balanced."""
+
+        class Controller:
+            def get_pv_power(self):
+                return 1100
+
+            def get_local_load_power(self):
+                return 350
+
+            def get_import_power(self):
+                return -743
+
+            def get_export_power(self):
+                return None
+
+            def get_battery_charge_power(self):
+                return 0
+
+            def get_battery_discharge_power(self):
+                return 0
+
+            def get_net_battery_power(self):
+                return 0
+
+        power = APIRealTimePower.from_controller(Controller())
+
+        assert power.gridImportPower.value == 0
+        assert power.gridExportPower.value == 743
+        assert power.gridExportPower.text == "743 W"
 
     def test_api_conversion_required_fields(self, sample_hourly_data):
         """Test that all required API fields are present after conversion."""

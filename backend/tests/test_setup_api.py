@@ -11,7 +11,7 @@ from copy import deepcopy
 from unittest.mock import MagicMock
 
 import pytest
-from api import router
+from api import _PROVIDER_PRICING_DEFAULTS, router
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -120,6 +120,7 @@ def _full_wizard_payload(**overrides) -> dict:
             "solax_modbus_growatt_min": {},
             "solax_modbus_growatt_sph": {},
             "solax_modbus_native": {},
+            "solis_modbus": {},
             "shared": {},
         },
         "nordpoolArea": "SE4",
@@ -536,6 +537,7 @@ class TestSetupComplete:
                 "solax_modbus_growatt_min": {},
                 "solax_modbus_growatt_sph": {},
                 "solax_modbus_native": {},
+                "solis_modbus": {},
                 "shared": {},
             }
         )
@@ -622,6 +624,7 @@ class TestSetupComplete:
                 "solax_modbus_growatt_min": {},
                 "solax_modbus_growatt_sph": {},
                 "solax_modbus_native": {},
+                "solis_modbus": {},
                 "shared": {},
             }
         )
@@ -794,6 +797,36 @@ class TestDiscoverLocaleDefaults:
         # Swedish cost fields preserved
         assert store["electricity_price"]["additional_costs"] == 0.773
         assert store["electricity_price"]["tax_reduction"] == 0.1988
+
+    def test_nordpool_custom_wins_when_official_service_missing(self):
+        """HACS/custom Nordpool can have a config entry but no official service call."""
+        store = deepcopy(_PRE_EXISTING_STORE)
+        ctrl = _make_discover_controller(store)
+        integrations = {
+            "growatt_found": False,
+            "device_sn": None,
+            "growatt_device_id": None,
+            "solax_found": False,
+            "nordpool_found": True,
+            "nordpool_area": "SE3",
+            "nordpool_custom_area": "SE3",
+            "nordpool_custom_entity": "sensor.nordpool_kwh_se3_sek_0_10_025",
+            "nordpool_config_entry_id": "entry-123",
+            "nordpool_official_service_found": False,
+            "octopus_found": False,
+            "detected_inverter_platforms": [],
+            "detected_phase_count": None,
+            "currency": "SEK",
+            "vat_multiplier": 1.25,
+        }
+
+        resp = self._run_discover(ctrl, integrations)
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["pricingDefaults"] == _PROVIDER_PRICING_DEFAULTS["nordpool_hacs"]
+        assert body["nordpoolCustomEntity"] == "sensor.nordpool_kwh_se3_sek_0_10_025"
+        assert body["nordpoolOfficialServiceFound"] is False
 
     def test_norwegian_nordpool_updates_currency_preserves_costs(self):
         """Non-Swedish Nordpool updates currency but keeps cost fields as rough defaults."""

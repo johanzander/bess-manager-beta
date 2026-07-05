@@ -1,0 +1,57 @@
+{
+  "name": "synthetic_historical_2024_08_16_high_spread_with_solar",
+  "description": "Synthetic historical scenario with high spread and solar production",
+  "base_prices": [
+    0.3,
+    0.4,
+    0.5,
+    0.6
+  ],
+  "home_consumption": [
+    1.0,
+    1.2,
+    1.1,
+    1.3
+  ],
+  "solar_production": [
+    0.5,
+    0.6,
+    0.7,
+    0.8
+  ],
+  "battery": {
+    "initial_soe": 5.0,
+    "min_soe_kwh": 2.0,
+    "max_soe_kwh": 10.0,
+    "efficiency_charge": 0.9,
+    "efficiency_discharge": 0.9,
+    "cycle_cost_per_kwh": 0.1,
+    "max_charge_power_kw": 2.0,
+    "max_discharge_power_kw": 2.0
+  },
+  "price_data": {
+    "markup_rate": 0.0,
+    "vat_multiplier": 1.0,
+    "additional_costs": 0.0,
+    "tax_reduction": 0.0
+  },
+  "expected_results": {
+    "base_cost": 2.11,
+    "battery_solar_cost": -0.53,
+    "base_to_battery_solar_savings": 2.64,
+    "base_to_battery_solar_savings_pct": 125.1185,
+    "total_charged": 0.0,
+    "total_discharged": 2.6
+  },
+  "expected_behavior": {
+    "description": "Short horizon high spread with solar: charge and export",
+    "intents_present": [
+      "BATTERY_EXPORT"
+    ],
+    "savings_positive": true,
+    "constraints": {
+      "soe_within_bounds": true,
+      "power_within_limits": true
+    }
+  }
+}

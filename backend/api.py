@@ -2898,7 +2898,13 @@ def _pricing_defaults_for_discovery(integrations: dict) -> dict:
         return _PROVIDER_PRICING_DEFAULTS["octopus"]
     if integrations.get("entsoe_found") and not integrations.get("nordpool_found"):
         return _PROVIDER_PRICING_DEFAULTS["entsoe"]
-    if integrations.get("nordpool_config_entry_id"):
+    if integrations.get("nordpool_custom_entity") and not integrations.get(
+        "nordpool_official_service_found"
+    ):
+        return _PROVIDER_PRICING_DEFAULTS["nordpool_hacs"]
+    if integrations.get("nordpool_config_entry_id") and integrations.get(
+        "nordpool_official_service_found"
+    ):
         return _PROVIDER_PRICING_DEFAULTS["nordpool_official"]
     if integrations.get("nordpool_custom_area"):
         return _PROVIDER_PRICING_DEFAULTS["nordpool_hacs"]
@@ -3010,6 +3016,12 @@ async def run_setup_discovery():
                 and "solax_modbus_growatt_sph" in platform_sensors
             ):
                 effective_platform = "solax_modbus_growatt_sph"
+            elif (
+                detected_platform
+                and detected_platform.startswith("growatt_server")
+                and "solis_modbus" in platform_sensors
+            ):
+                effective_platform = "solis_modbus"
             sensors = dict(platform_sensors.get(effective_platform, {}))
             _suffix_maps = {
                 "growatt_server_min": ha.GROWATT_MIN_SUFFIX_MAP,
@@ -3017,6 +3029,7 @@ async def run_setup_discovery():
                 "solax_modbus_growatt_min": ha.SOLAX_GROWATT_MIN_SUFFIX_MAP,
                 "solax_modbus_growatt_sph": ha.SOLAX_GROWATT_SPH_SUFFIX_MAP,
                 "solax_modbus_native": ha.SOLAX_NATIVE_SUFFIX_MAP,
+                "solis_modbus": ha.SOLIS_SUFFIX_MAP,
             }
             suffix_map = _suffix_maps.get(effective_platform, ha.GROWATT_MIN_SUFFIX_MAP)
             all_bess_keys = list(set(suffix_map.values()))
@@ -3055,6 +3068,7 @@ async def run_setup_discovery():
                 "device_sn": integrations["device_sn"],
                 "growatt_device_id": integrations["growatt_device_id"],
                 "solax_found": integrations["solax_found"],
+                "solis_found": integrations.get("solis_found", False),
                 "solax_has_growatt_tou": integrations.get(
                     "solax_has_growatt_tou", False
                 ),
@@ -3066,6 +3080,9 @@ async def run_setup_discovery():
                 "nordpool_custom_area": integrations.get("nordpool_custom_area"),
                 "nordpool_custom_entity": integrations.get("nordpool_custom_entity"),
                 "nordpool_config_entry_id": integrations["nordpool_config_entry_id"],
+                "nordpool_official_service_found": integrations.get(
+                    "nordpool_official_service_found", False
+                ),
                 "octopus_found": integrations["octopus_found"],
                 "entsoe_found": integrations.get("entsoe_found", False),
                 "entsoe_entity": integrations.get("entsoe_entity"),

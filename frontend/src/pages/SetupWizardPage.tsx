@@ -62,7 +62,7 @@ const SetupWizardPage: React.FC = () => {
 
   const [homeForm, setHomeForm] = useState<HomeForm>({
     consumption: 3.5,
-    consumptionStrategy: 'sensor',
+    consumptionStrategy: 'ha_statistics',
     maxFuseCurrent: 25,
     voltage: 230,
     safetyMarginFactor: 1.0,
@@ -103,10 +103,11 @@ const SetupWizardPage: React.FC = () => {
         setHomeForm(f => ({ ...f, phaseCount: d.detectedPhaseCount! }));
       }
       // Auto-select pricing provider based on discovered integrations.
-      // When the official HA Nordpool integration is present (has a
-      // config_entry_id), prefer it.  Otherwise fall back to HACS custom.
-      const hasOfficialNordpool = !!d.nordpoolConfigEntryId;
-      const hasCustomNordpool = !!d.nordpoolCustomArea;
+      // Prefer official Nordpool only when the official service action exists.
+      // HACS/custom Nordpool can also expose a config entry but lacks
+      // nordpool.get_prices_for_date.
+      const hasOfficialNordpool = !!d.nordpoolConfigEntryId && !!d.nordpoolOfficialServiceFound;
+      const hasCustomNordpool = !!d.nordpoolCustomEntity || !!d.nordpoolCustomArea;
       const autoProvider = d.octopusFound && !d.nordpoolFound
         ? 'octopus' as const
         : d.entsoeFound && !d.nordpoolFound
@@ -117,7 +118,7 @@ const SetupWizardPage: React.FC = () => {
               ? 'nordpool_hacs' as const
               : undefined;
       // Use area from the matching integration — not mixed
-      const autoArea = hasOfficialNordpool ? d.nordpoolArea : d.nordpoolCustomArea;
+      const autoArea = hasOfficialNordpool ? d.nordpoolArea : (d.nordpoolCustomArea || d.nordpoolArea);
       setPricingForm(f => ({
         ...f,
         // Only seed spot-multiplier defaults when the provider is newly
@@ -146,9 +147,16 @@ const SetupWizardPage: React.FC = () => {
             : f
         ));
       }
-      // Auto-select the first detected platform; user can switch if multiple
+      // Auto-select the detected platform. Prefer an already configured
+      // platform, then Solis when solis_modbus sensors are present.
+      const existing = existingSensorsRef.current;
       const detected = d.detectedInverterPlatforms ?? [];
-      const detectedPlatform = detected[0] ?? null;
+      const savedPlatform = typeof existing.platform === 'string' ? existing.platform : '';
+      const detectedPlatform = savedPlatform && d.platformSensors?.[savedPlatform]
+        ? savedPlatform
+        : d.platformSensors?.solis_modbus
+          ? 'solis_modbus'
+          : detected[0] ?? null;
       if (detectedPlatform) {
         setInverterForm(f => ({ ...f, inverterPlatform: detectedPlatform }));
       }
@@ -160,7 +168,6 @@ const SetupWizardPage: React.FC = () => {
       // platformSensors has per-platform dicts; shared sensors come from d.sensors.
       const platform = detectedPlatform ?? inverterForm.inverterPlatform ?? '';
       const newSensors: PerPlatformSensors = emptyPerPlatformSensors(platform);
-      const existing = existingSensorsRef.current;
 
       // Populate each platform's sub-dict from discovered platformSensors
       if (d.platformSensors) {

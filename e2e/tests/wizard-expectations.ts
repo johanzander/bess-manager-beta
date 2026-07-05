@@ -10,7 +10,7 @@ export interface WizardExpectation {
   // Mandatory integrations
   growattFound: boolean;
   solaxFound: boolean;
-  inverterPlatform: 'growatt_server_min' | 'growatt_server_sph' | 'solax_modbus_native' | 'solax_modbus_growatt_min' | 'solax_modbus_growatt_sph';
+  inverterPlatform: 'growatt_server_min' | 'growatt_server_sph' | 'solax_modbus_native' | 'solax_modbus_growatt_min' | 'solax_modbus_growatt_sph' | 'solis_modbus';
   nordpoolFound: boolean;
   octopusFound: boolean;
   /** ENTSO-e Transparency Platform (e.g. Belpex). Optional — defaults to false. */

@@ -16,7 +16,7 @@ from core.bess.models import (
     OptimizationResult,
     PeriodData,
 )
-from core.bess.price_manager import MockSource
+from core.bess.price_manager import HomeAssistantSource, MockSource
 from core.bess.time_utils import TIMEZONE
 
 _DEFAULT_OPTIONS = {"inverter": {"platform": "growatt_server_min"}}
@@ -76,15 +76,41 @@ class TestUpdateSettings:
             system.update_settings({"battery": {"capacity": "not_a_number"}})
 
     def test_energy_provider_update_creates_new_source(self, system):
-        system.update_settings(
-            {
-                "energy_provider": {
-                    "provider": "nordpool_official",
-                    "nordpool_official": {"config_entry_id": "abc123"},
+        with patch.object(system._controller, "has_service", return_value=True):
+            system.update_settings(
+                {
+                    "energy_provider": {
+                        "provider": "nordpool_official",
+                        "nordpool_official": {"config_entry_id": "abc123"},
+                    }
                 }
-            }
-        )
+            )
         assert system._energy_provider_config["provider"] == "nordpool_official"
+
+    def test_nordpool_official_without_service_falls_back_to_hacs_entity(self, system):
+        with (
+            patch.object(system._controller, "has_service", return_value=False),
+            patch.object(
+                system._controller,
+                "discover_nordpool_hacs_entity",
+                return_value="sensor.nordpool_kwh_se3_sek_0_10_025",
+            ),
+        ):
+            system.update_settings(
+                {
+                    "energy_provider": {
+                        "provider": "nordpool_official",
+                        "nordpool_official": {"config_entry_id": "abc123"},
+                        "nordpool_hacs": {"entity": ""},
+                    }
+                }
+            )
+
+        assert isinstance(system._price_manager.price_source, HomeAssistantSource)
+        assert (
+            system._price_manager.price_source.entity
+            == "sensor.nordpool_kwh_se3_sek_0_10_025"
+        )
 
     def test_home_settings_enables_power_monitor(self, system):
         assert system._power_monitor is None

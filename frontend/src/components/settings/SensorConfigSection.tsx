@@ -23,6 +23,7 @@ export interface DiscoveryResult {
   deviceSn: string | null;
   growattDeviceId: string | null;
   solaxFound: boolean;
+  solisFound?: boolean;
   solaxHasGrowattTou: boolean;
   solaxHasGrowattGen3: boolean;
   nordpoolFound: boolean;
@@ -30,6 +31,7 @@ export interface DiscoveryResult {
   nordpoolCustomArea: string | null;
   nordpoolCustomEntity: string | null;
   nordpoolConfigEntryId: string | null;
+  nordpoolOfficialServiceFound?: boolean;
   octopusFound: boolean;
   octopusEntities?: {
     importToday?: string;
@@ -76,6 +78,7 @@ function isIntegrationFound(
   if (id === 'solax_modbus_growatt_min') return discovery.solaxHasGrowattTou;
   if (id === 'solax_modbus_growatt_sph') return discovery.solaxHasGrowattGen3;
   if (id === 'solax_modbus_native') return discovery.solaxFound;
+  if (id === 'solis_modbus') return Boolean(discovery.solisFound || (sensors.solis_modbus ?? {})['solis_tou_mode']);
   if (id === 'nordpool') return discovery.nordpoolFound;
   if (id === 'phase_current') {
     return !!(shared['current_l1'] || shared['current_l2'] || shared['current_l3']);
@@ -112,6 +115,30 @@ function sensorIcon(status: HealthStatus | null, hasValue: boolean) {
   return <CheckCircle className="h-3.5 w-3.5 text-green-500 flex-shrink-0" />;
 }
 
+function SensorHelp({ sensor }: { sensor: { helpText?: string; exampleTemplate?: string } }) {
+  if (!sensor.helpText && !sensor.exampleTemplate) return null;
+
+  return (
+    <div className="sm:ml-[13.5rem] space-y-1.5">
+      {sensor.helpText && (
+        <p className="text-[11px] leading-4 text-gray-500 dark:text-gray-400">
+          {sensor.helpText}
+        </p>
+      )}
+      {sensor.exampleTemplate && (
+        <details className="rounded-md border border-gray-200 dark:border-gray-600 bg-white/80 dark:bg-gray-800/80 overflow-hidden">
+          <summary className="cursor-pointer select-none px-2 py-1.5 text-[11px] font-medium text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700/60">
+            Example Home Assistant template
+          </summary>
+          <pre className="overflow-x-auto border-t border-gray-100 dark:border-gray-700 px-2 py-2 text-[11px] leading-4 text-gray-700 dark:text-gray-200">
+            <code>{sensor.exampleTemplate}</code>
+          </pre>
+        </details>
+      )}
+    </div>
+  );
+}
+
 // Derive a status dot from discovery data (wizard mode)
 function discoveryDot(intg: IntegrationDef, found: boolean, counts: ReturnType<typeof integrationSensorCounts>) {
   if (counts.total === 0) return null;
@@ -146,7 +173,7 @@ function healthDot(
 // ---------------------------------------------------------------------------
 
 // IDs of inverter integrations — only one should be visible at a time.
-const INVERTER_IDS = new Set(['growatt_server_min', 'growatt_server_sph', 'solax_modbus_growatt_min', 'solax_modbus_growatt_sph', 'solax_modbus_native']);
+const INVERTER_IDS = new Set(['growatt_server_min', 'growatt_server_sph', 'solax_modbus_growatt_min', 'solax_modbus_growatt_sph', 'solax_modbus_native', 'solis_modbus']);
 
 interface Props {
   sensors: PerPlatformSensors;
@@ -196,6 +223,9 @@ export function SensorConfigSection({ sensors, onChange, inverterForm, onInverte
   const solaxDetected = wizardMode
     ? Boolean(discovery.solaxFound && !discovery.solaxHasGrowattTou && !discovery.solaxHasGrowattGen3)
     : Boolean((sensors.solax_modbus_native ?? {})['solax_power_control_mode'] || (sensors.solax_modbus_native ?? {})['solax_active_power']);
+  const solisDetected = wizardMode
+    ? Boolean(discovery.solisFound || (sensors.solis_modbus ?? {})['solis_tou_mode'])
+    : Boolean((sensors.solis_modbus ?? {})['solis_tou_mode'] || (sensors.solis_modbus ?? {})['battery_soc']);
 
   /** Update a sensor value in the correct sub-dict (platform or shared). */
   const handleSensorChange = (integrationId: string, sensorKey: string, value: string) => {
@@ -218,7 +248,8 @@ export function SensorConfigSection({ sensors, onChange, inverterForm, onInverte
   const isCloudActive = inverterForm.inverterPlatform === 'growatt_server_min' || inverterForm.inverterPlatform === 'growatt_server_sph';
   const isModbusActive = inverterForm.inverterPlatform === 'solax_modbus_growatt_min'
     || inverterForm.inverterPlatform === 'solax_modbus_growatt_sph'
-    || inverterForm.inverterPlatform === 'solax_modbus_native';
+    || inverterForm.inverterPlatform === 'solax_modbus_native'
+    || inverterForm.inverterPlatform === 'solis_modbus';
 
   const handleIntegrationChange = (integration: 'cloud' | 'modbus') => {
     if (integration === 'cloud') {
@@ -229,6 +260,7 @@ export function SensorConfigSection({ sensors, onChange, inverterForm, onInverte
       // Default to solax_modbus_growatt_min if Growatt TOU detected, otherwise native
       const newType = growattModbusDetected ? 'solax_modbus_growatt_min'
         : growattModbusGen3Detected ? 'solax_modbus_growatt_sph'
+        : solisDetected ? 'solis_modbus'
         : 'solax_modbus_native';
       onInverterChange({ ...inverterForm, inverterPlatform: newType });
       onChange({ ...sensors, platform: newType });
@@ -263,7 +295,7 @@ export function SensorConfigSection({ sensors, onChange, inverterForm, onInverte
         {/* Level 1: Integration tabs — Growatt Cloud vs SolaX Modbus */}
         {(() => {
           const cloudDetected = growattDetected;
-          const modbusDetected = growattModbusDetected || growattModbusGen3Detected || solaxDetected;
+          const modbusDetected = growattModbusDetected || growattModbusGen3Detected || solaxDetected || solisDetected;
           const activeTab = isCloudActive ? 'cloud' : 'modbus';
 
           return (
@@ -342,6 +374,7 @@ export function SensorConfigSection({ sensors, onChange, inverterForm, onInverte
                     { value: 'solax_modbus_native' as const, label: 'SolaX Native', detected: solaxDetected },
                     { value: 'solax_modbus_growatt_min' as const, label: 'Growatt MIN/GEN4', detected: growattModbusDetected },
                     { value: 'solax_modbus_growatt_sph' as const, label: 'Growatt SPH/GEN3', detected: growattModbusGen3Detected },
+                    { value: 'solis_modbus' as const, label: 'Solis', detected: solisDetected },
                   ]).map(opt => {
                     const selected = inverterForm.inverterPlatform === opt.value;
                     const disabled = wizardMode && !opt.detected;
@@ -405,7 +438,7 @@ export function SensorConfigSection({ sensors, onChange, inverterForm, onInverte
                       return (
                         <div
                           key={s.key}
-                          className={`flex flex-col sm:flex-row sm:items-center gap-1 p-2 rounded-lg ${
+                          className={`space-y-2 p-2 rounded-lg ${
                             isMissing && s.required
                               ? 'bg-orange-50 dark:bg-orange-900/10'
                               : isMissing
@@ -413,26 +446,29 @@ export function SensorConfigSection({ sensors, onChange, inverterForm, onInverte
                                 : 'bg-gray-50 dark:bg-gray-700/50'
                           }`}
                         >
-                          <div className="flex items-center gap-1.5 sm:w-52 flex-shrink-0">
-                            {sensorIcon(wizardMode ? null : status, !isMissing)}
-                            <span className="text-xs font-medium text-gray-600 dark:text-gray-300">
-                              {s.label}
-                            </span>
-                            {s.required && isMissing && (
-                              <span className="text-[9px] text-orange-500 dark:text-orange-400 font-medium">*</span>
-                            )}
+                          <div className="flex flex-col sm:flex-row sm:items-center gap-1">
+                            <div className="flex items-center gap-1.5 sm:w-52 flex-shrink-0">
+                              {sensorIcon(wizardMode ? null : status, !isMissing)}
+                              <span className="text-xs font-medium text-gray-600 dark:text-gray-300">
+                                {s.label}
+                              </span>
+                              {s.required && isMissing && (
+                                <span className="text-[9px] text-orange-500 dark:text-orange-400 font-medium">*</span>
+                              )}
+                            </div>
+                            <input
+                              type="text"
+                              value={val}
+                              placeholder={isMissing ? 'Not detected — enter entity ID' : ''}
+                              onChange={e => handleSensorChange(intg.id, s.key, e.target.value)}
+                              className={`flex-1 text-xs px-2 py-1 rounded border font-mono ${
+                                isMissing && s.required
+                                  ? 'border-orange-300 dark:border-orange-600 bg-white dark:bg-gray-800 text-orange-700 dark:text-orange-300 placeholder-orange-400'
+                                  : 'border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-200'
+                              } focus:outline-none focus:ring-1 focus:ring-blue-400`}
+                            />
                           </div>
-                          <input
-                            type="text"
-                            value={val}
-                            placeholder={isMissing ? 'Not detected — enter entity ID' : ''}
-                            onChange={e => handleSensorChange(intg.id, s.key, e.target.value)}
-                            className={`flex-1 text-xs px-2 py-1 rounded border font-mono ${
-                              isMissing && s.required
-                                ? 'border-orange-300 dark:border-orange-600 bg-white dark:bg-gray-800 text-orange-700 dark:text-orange-300 placeholder-orange-400'
-                                : 'border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-200'
-                            } focus:outline-none focus:ring-1 focus:ring-blue-400`}
-                          />
+                          <SensorHelp sensor={s} />
                         </div>
                       );
                     })}
@@ -507,7 +543,7 @@ export function SensorConfigSection({ sensors, onChange, inverterForm, onInverte
                         return (
                           <div
                             key={s.key}
-                            className={`flex flex-col sm:flex-row sm:items-center gap-1 p-2 rounded-lg ${
+                            className={`space-y-2 p-2 rounded-lg ${
                               isMissing && s.required
                                 ? 'bg-orange-50 dark:bg-orange-900/10'
                                 : isMissing
@@ -515,26 +551,29 @@ export function SensorConfigSection({ sensors, onChange, inverterForm, onInverte
                                   : 'bg-gray-50 dark:bg-gray-700/50'
                             }`}
                           >
-                            <div className="flex items-center gap-1.5 sm:w-52 flex-shrink-0">
-                              {sensorIcon(wizardMode ? null : status, !isMissing)}
-                              <span className="text-xs font-medium text-gray-600 dark:text-gray-300">
-                                {s.label}
-                              </span>
-                              {s.required && isMissing && (
-                                <span className="text-[9px] text-orange-500 dark:text-orange-400 font-medium">*</span>
-                              )}
+                            <div className="flex flex-col sm:flex-row sm:items-center gap-1">
+                              <div className="flex items-center gap-1.5 sm:w-52 flex-shrink-0">
+                                {sensorIcon(wizardMode ? null : status, !isMissing)}
+                                <span className="text-xs font-medium text-gray-600 dark:text-gray-300">
+                                  {s.label}
+                                </span>
+                                {s.required && isMissing && (
+                                  <span className="text-[9px] text-orange-500 dark:text-orange-400 font-medium">*</span>
+                                )}
+                              </div>
+                              <input
+                                type="text"
+                                value={val}
+                                placeholder={isMissing ? 'Not detected — enter entity ID' : ''}
+                                onChange={e => handleSensorChange(intg.id, s.key, e.target.value)}
+                                className={`flex-1 text-xs px-2 py-1 rounded border font-mono ${
+                                  isMissing && s.required
+                                    ? 'border-orange-300 dark:border-orange-600 bg-white dark:bg-gray-800 text-orange-700 dark:text-orange-300 placeholder-orange-400'
+                                    : 'border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-200'
+                                } focus:outline-none focus:ring-1 focus:ring-blue-400`}
+                              />
                             </div>
-                            <input
-                              type="text"
-                              value={val}
-                              placeholder={isMissing ? 'Not detected — enter entity ID' : ''}
-                              onChange={e => handleSensorChange(intg.id, s.key, e.target.value)}
-                              className={`flex-1 text-xs px-2 py-1 rounded border font-mono ${
-                                isMissing && s.required
-                                  ? 'border-orange-300 dark:border-orange-600 bg-white dark:bg-gray-800 text-orange-700 dark:text-orange-300 placeholder-orange-400'
-                                  : 'border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-200'
-                              } focus:outline-none focus:ring-1 focus:ring-blue-400`}
-                            />
+                            <SensorHelp sensor={s} />
                           </div>
                         );
                       })}
