@@ -4,6 +4,17 @@ All notable changes to BESS Battery Manager will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [9.9.0b9] - 2026-07-06
+
+### Changed
+
+- **DP optimizer now uses pure backward induction instead of ad hoc profitability floors** — Removed the `cost_basis` discharge-profitability floor, the anti-cycling special case, and the whole-day `min_action_profit_threshold` rejection gate. `IDLE` is always a feasible action, so the value function's own `max` already makes the hold-vs-discharge call correctly per Bellman's principle of optimality; a separate veto on top was redundant at best. Replaced with a trivial idle-vs-DP-cost numerical safety net that only guards against SoE-grid discretization residual. Changes nearly every scenario's expected schedule — equal-or-better economics on all 26 pinned fixtures. `min_action_profit_threshold` remains in settings/schema but is now unused (backward-compatible for existing installs). ([#242](https://github.com/johanzander/bess-manager/pull/242))
+
+### Fixed
+
+- **Small export overshoot beyond `home_consumption` was miscredited as export revenue** — Load-first hardware self-throttles and never actually delivers that excess, so it's no longer counted as savings. ([#240](https://github.com/johanzander/bess-manager/pull/240), [#242](https://github.com/johanzander/bess-manager/pull/242))
+- **`BATTERY_EXPORT` classification threshold was 10x coarser than related flow checks** — `classify_strategic_intent`/`infer_intent_from_flows` used a `0.1` kWh threshold instead of `0.01`, misclassifying small export-only discharges as `LOAD_SUPPORT` (a mode that physically cannot export), causing planned-vs-realized cost gaps up to 18.7 SEK on quarter-hourly fixtures. Reconciled to `0.01` everywhere, including the reward function's matching export-credit threshold. ([#242](https://github.com/johanzander/bess-manager/pull/242))
+
 ## [9.9.0b8] - 2026-07-05
 
 Syncs beta with production main through the self-resolved health-check recovery notice.
