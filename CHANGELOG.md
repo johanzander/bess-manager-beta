@@ -4,6 +4,13 @@ All notable changes to BESS Battery Manager will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **`GRID_CHARGING` charge rate display was stuck at a static 100% in logs and the schedule API** — `get_detailed_period_groups()` (used by the debug log's schedule table and by the API/frontend) read a static `charge_rate=100` for GRID_CHARGING periods instead of the action-derived rate `get_period_settings()` already computed since [#191](https://github.com/johanzander/bess-manager/pull/191), so small top-up charges (e.g. ~1% of max power) were misreported as full-rate 100% in the ASCII debug table. Both call sites now share one `_compute_charge_rate()` helper.
+- **Redundant "Intent transition" log spam on every hourly re-optimization** — `create_schedule()` in both the Growatt MIN and Solax Modbus Growatt controllers re-logged every already-elapsed intent transition for the whole day on each hourly re-plan, dominating debug bundles (~88% of INFO-level log lines). Transition logging now starts from the current period instead of period 0. Also removed a per-run log dump of the static `INTENT_TO_MODE` class constant.
+
 ## [9.9.0b9] - 2026-07-06
 
 ### Changed
