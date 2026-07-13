@@ -10,6 +10,7 @@ from unittest.mock import patch
 
 import pytest
 
+from core.bess import time_utils
 from core.bess.models import PeriodData
 
 
@@ -246,9 +247,12 @@ class TestScheduleUpdates:
         # Battery discharged since midnight - re-optimize later in the day
         # from a materially different SOC.
         mock_controller.settings["battery_soc"] = 20
-        success = quarterly_battery_system.update_battery_schedule(
-            32, prepare_next_day=False
-        )
+        real_now = time_utils.now()
+        with patch("core.bess.sensor_collector.time_utils.now") as mock_now:
+            mock_now.return_value = real_now.replace(hour=8, minute=0, second=0)
+            success = quarterly_battery_system.update_battery_schedule(
+                32, prepare_next_day=False
+            )
         assert success, "Should create period-32 re-optimization schedule"
 
         latest_schedule = quarterly_battery_system.schedule_store.get_latest_schedule()
