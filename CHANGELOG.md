@@ -4,6 +4,14 @@ All notable changes to BESS Battery Manager will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [9.9.0b18] - 2026-07-17
+
+Everything else accumulated in `Unreleased` on main (daily savings history/aggregates, Net Grid Cost headline redesign, DP backward-induction rework, ENTSO-e/Belpex, export-miscrediting/threshold fixes, anti-cycling, GRID_CHARGING throttling/display, LOAD_SUPPORT, Savings badge threshold fix, SolaX EMS write, release-pipeline/triage internals, DP terminal holding pattern, wizard EMS/SOC-limit sensor discovery, inverter charge power rate, Hours-in-Today undefined:00 fix, date picker dark mode, DP continuous-action breakpoint search, HA API timeout log-level fix, debug export initial_soe, Savings/Insights SOC clamp, Growatt VPP control mode, dashboard full-horizon Net Cost/Net Savings, Inverter tab Intent reconciliation, DP morning-export mistiming fix, SOLAR_STORAGE shadow-price gate, VPP TOU/EMS-entity fixes, boundary-artifact test fix) already shipped in `v9.9.0b17`. This release covers only what's genuinely new since `v9.9.0b17`.
+
+### Fixed
+
+- **Growatt VPP mode could force a full-power battery discharge during a planned `SOLAR_EXPORT`/`SOLAR_STORAGE` hold, dumping the battery from a low SOC** — The intra-period discharge gate ([#187](https://github.com/johanzander/bess-manager/issues/187)/[#318](https://github.com/johanzander/bess-manager/issues/318)) assumes `discharge_rate` acts as a ceiling under native `load_first` firmware (only draws what's needed to cover an actual deficit); that assumption is false for VPP-style control (`SolaxModbusGrowattController` in `control_mode="vpp"`, and `SolaxController`), where `discharge_rate` becomes an immediate forced power command regardless of actual load. Added a `discharge_rate_is_load_following` capability on `InverterController` (default `True`, matching today's Growatt TOU/cloud behavior; `False` on VPP-style controllers) and gated the discharge-gate override on it. Also fixed `apply_discharge_inhibit()`, found during review to have the same class of bug: it wrote the EMS `discharge_rate` entity directly, a dead write on VPP platforms where hardware never reads that entity — it now routes through the same per-period controller path as the main schedule write, so the discharge-inhibit safety mechanism (e.g. suppressing discharge while an EV charges) actually works on VPP platforms. ([#324](https://github.com/johanzander/bess-manager/issues/324))
+
 ## [Unreleased]
 
 ### Added
