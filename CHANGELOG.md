@@ -4,6 +4,15 @@ All notable changes to BESS Battery Manager will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [9.9.0b20] - 2026-07-19
+
+Everything else accumulated in `Unreleased` on main (Growatt VPP control mode, daily savings history, Net Grid Cost headline redesign, DP backward-induction rework, ENTSO-e/Belpex, the settings-path unification, Solcast entity-registry detection, spot_multiplier, the DP profitability-gate solar baseline fix, currency-appropriate cycle-cost default, self-resolved health-check recovery notice, export-miscrediting/threshold fixes, anti-cycling, GRID_CHARGING throttling/display, LOAD_SUPPORT, Savings badge threshold fix, SolaX EMS write, release-pipeline/triage internals, DP terminal holding pattern, wizard EMS/SOC-limit sensor discovery, inverter charge power rate, Hours-in-Today undefined:00 fix, date picker dark mode, DP continuous-action breakpoint search, HA API timeout log-level fix, debug export initial_soe, Savings/Insights SOC clamp, Growatt VPP control mode, dashboard full-horizon Net Cost/Net Savings, Inverter tab Intent reconciliation, DP morning-export mistiming fix, SOLAR_STORAGE shadow-price gate, VPP TOU/EMS-entity fixes, boundary-artifact test fix, Growatt VPP forced-discharge gate) already shipped in `v9.9.0b19`. This release covers only what's genuinely new since `v9.9.0b19`.
+
+### Fixed
+
+- **Detailed energy-flow split could invent flows from cross-sensor noise** — `grid_to_home`/`battery_to_grid` were force-balanced directly against `grid_imported`/`grid_exported` with no cap from `home_consumption`/`battery_discharged`. When independent lifetime-counter sensors disagree by a small amount (tolerated by `validate_energy_balance`, up to 0.2 kWh), that noise was misattributed as a real flow to an entity that consumed or discharged nothing — e.g. a period with `home_consumption=0` still showing a nonzero `grid_to_home`. Both flows are now capped by their governing aggregate instead of force-balancing against the grid totals. ([#342](https://github.com/johanzander/bess-manager/pull/342))
+- **`influxdb_7d_avg` consumption-forecast comparison logged 7 spurious WARNINGs per call when InfluxDB wasn't configured** — `get_consumption_forecast_comparison()` always attempted the `influxdb_7d_avg` forecast regardless of configuration, hitting on every mock run and any production system without InfluxDB set up. Guarded with the existing `is_influxdb_configured()` check, matching the pattern already used elsewhere in the file. ([#343](https://github.com/johanzander/bess-manager/pull/343))
+
 ## [Unreleased]
 
 ### Added
