@@ -19,10 +19,6 @@ from core.bess.models import DecisionData, EnergyData, OptimizationResult, Perio
 from core.bess.schedule_store import StoredSchedule
 from core.bess.settings_store import VALID_PLATFORMS
 
-from core.bess import time_utils
-from core.bess.models import DecisionData, EnergyData, OptimizationResult, PeriodData
-from core.bess.schedule_store import StoredSchedule
-
 _test_app = FastAPI()
 _test_app.include_router(router)
 _client = TestClient(_test_app, raise_server_exceptions=False)

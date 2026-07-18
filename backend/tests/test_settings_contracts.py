@@ -53,8 +53,6 @@ import core.bess.settings_store as _sm
 from core.bess.settings import BatterySettings, HomeSettings
 from core.bess.settings_store import SettingsStore
 
-from core.bess.settings import BatterySettings, HomeSettings
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
