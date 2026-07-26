@@ -46,6 +46,18 @@
 
 ---
 
+### **Surface Inverter Max AC Power in the setup wizard**
+
+**Impact**: Medium | **Effort**: Low | **Dependencies**: `SetupWizardPage.tsx`
+
+**Description**: `inverter_max_ac_power_kw` (PR #305) caps combined solar + discharge AC output at the inverter's rated power, preventing over-discharge plans on hybrid inverters — but it's opt-in (default 0/disabled) and currently only surfaced in Settings → Battery, not the setup wizard. Issue #304 (ridax67) hit exactly this — a planned discharge exceeding the inverter's 10kW AC limit — and had to be told about the setting after the fact. New users are unlikely to discover it unless they hit the symptom first.
+
+**Implementation**: Add the `inverterMaxAcPowerKw` / `inverterAcPowerMargin` fields to the battery step of `SetupWizardPage.tsx`, likely alongside other inverter-rating fields, with a short explanation of when to set it (hybrid/DC-coupled inverters where solar + discharge can exceed the inverter's AC rating).
+
+**Files**: `frontend/src/pages/SetupWizardPage.tsx`, `frontend/src/components/settings/BatteryFormSection.tsx` (for reference on existing field wiring)
+
+---
+
 ### **Rename `strategic_intent` to `battery_intent` throughout the codebase**
 
 **Impact**: Low | **Effort**: Low | **Dependencies**: `decision_intelligence.py`, `dp_battery_algorithm.py`, `sph_schedule.py`, `models.py`, frontend
@@ -810,5 +822,17 @@ The `_get_hour_readings` (and thus the InfluxDB query) is called at startup (to 
 **`DecisionData.immediate_value` duplicates the live `EconomicData.grid_cost`/dashboard "Net Grid Cost" metric and should probably be removed.** Traced while building the debug-log visualization skill: `immediate_value = export_revenue - import_cost - battery_wear_cost` (`decision_intelligence.py:413`) is exactly `-(grid_cost + battery_wear_cost)`, where `grid_cost = import_cost - export_revenue` (`core/bess/models.py:232`) is the same figure already surfaced live as `netGridCost` (`backend/api.py:776-782` → `SystemStatusCard.tsx`'s headline tile). The only difference is a sign flip and whether wear cost is netted in — and neither `immediate_value` nor `future_value` (nor the `economic_chain` narrative string, nor `/api/decision-intelligence`) is reachable anywhere in the live app: `frontend/src/components/DecisionFramework.tsx`, the only consumer that renders any of these fields, is never imported by any routed page in `App.tsx` — it's orphaned/dead code. `future_value` (fixed in #353 to no longer be always `0.0`) doesn't have this exact duplication problem — there's no live "value-to-go" KPI to compare against — but it's equally unreachable today.
 
 **Suggestion**: remove `immediate_value` (and the `economic_chain` string's reliance on it) once a decision is made on `DecisionFramework.tsx`/`/api/decision-intelligence` — either wire it up to the real app using `grid_cost`/`netSavings` terminology instead of re-deriving a redundant metric, or delete the dead path entirely. Not filed as its own issue since it's a design/scope decision, not a bug.
+
+---
+
+## From #387 runtime power gap-fill code review (non-blocking)
+
+**`PowerSampleBuffer.consume()`'s `if values` guard is dead code** (`core/bess/power_sample_buffer.py`) — `record()` always appends immediately via `setdefault(...).append(watts)`, so no `values` list can ever be empty when `consume()` reaches it. Harmless but unnecessary defensiveness; inconsistent with the "no speculative fallbacks" convention.
+
+**`sample_live_power()`'s per-getter `entity_id`/skip handling is implicit rather than defensive-by-design** (`core/bess/sensor_collector.py`) — correct today, just worth a second look if the getter-based rewrite (done in the #387 final-review fix wave) is touched again.
+
+**Stale line-number citation in a test docstring** (`core/bess/tests/unit/test_sensor_collector_gapfill.py:7`) — cites the InfluxDB gap-fill `if` block at a line range that has drifted by one line from its actual current location (`252-263`) after later edits in the same file. Cosmetic only.
+
+**`backend/app.py` has no `if __name__ == "__main__":` guard around its module-level `BESSController()` construction and `start_in_background()` call** — pre-existing, unrelated to #387, but it's what forces `backend/tests/test_scheduler_jobs.py` to patch two unrelated methods (`SettingsStore._write`, `HomeAssistantAPIController.get_ha_config`) just to import the module safely for testing. Worth a guard so `backend/app.py` is import-safe for future tests without workarounds.
 
 ---

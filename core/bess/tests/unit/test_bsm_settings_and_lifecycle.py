@@ -5,7 +5,7 @@ using MockHomeAssistantController from conftest.
 """
 
 from datetime import datetime, timedelta
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -247,6 +247,31 @@ class TestHandleSpecialCases:
         )
         assert system._initial_soc_pct is None
 
+    def test_period_zero_actual_rollover_clears_historical_store(self, system):
+        """The true midnight boundary (00:00 quarterly job) is the only place
+        that should clear today's actuals - see issue #380 follow-up."""
+        with patch.object(system.historical_store, "clear") as mock_clear:
+            system._handle_special_cases(
+                period=0, prepare_next_day=False, is_first_run=True
+            )
+            mock_clear.assert_called_once()
+
+    def test_prepare_next_day_does_not_clear_historical_store(self, system):
+        """prepare_next_day fires at 23:55, 5 minutes before midnight, while
+        today's dashboard still needs today's actuals. Clearing here wiped
+        today's real sensor data early and produced false "missing hours"
+        and a broken chart (issue #380 follow-up)."""
+        with (
+            patch.object(system, "get_current_daily_view"),
+            patch.object(system.daily_view_store, "save_day"),
+            patch.object(system, "_fetch_predictions"),
+            patch.object(system.historical_store, "clear") as mock_clear,
+        ):
+            system._handle_special_cases(
+                period=95, prepare_next_day=True, is_first_run=False
+            )
+            mock_clear.assert_not_called()
+
     def test_prepare_next_day_clears_stores_and_refetches(self, system):
         system._consumption_predictions = [1.0] * 96
         system._solar_predictions = [0.0] * 96
@@ -406,6 +431,49 @@ class TestRefreshHealthCheck:
 
         assert system.has_critical_sensor_failures()
         assert system.get_critical_sensor_failures() == ["Battery SOC"]
+
+    def test_retries_schedule_build_when_no_schedule_and_sensors_healthy(self, system):
+        """A health check that finds no critical failures but no schedule was
+        ever built (e.g. the initial startup schedule build failed while
+        sensors were unavailable) should trigger a retry. Otherwise the
+        dashboard is stuck showing "initializing" until the next quarterly
+        cron tick or a manual restart, even though the banner reports the
+        system is healthy. See debug log 2026-07-25-220017.
+        """
+        assert system._current_schedule is None
+        healthy_result = {
+            "status": "OK",
+            "checks": [{"name": "Battery SOC", "status": "OK", "required": True}],
+        }
+        with (
+            patch(
+                "core.bess.battery_system_manager.run_system_health_checks",
+                return_value=healthy_result,
+            ),
+            patch.object(
+                system, "update_battery_schedule", return_value=True
+            ) as mock_update,
+        ):
+            system.refresh_health_check()
+
+        mock_update.assert_called_once()
+
+    def test_does_not_retry_schedule_build_when_schedule_already_exists(self, system):
+        system._current_schedule = MagicMock()
+        healthy_result = {
+            "status": "OK",
+            "checks": [{"name": "Battery SOC", "status": "OK", "required": True}],
+        }
+        with (
+            patch(
+                "core.bess.battery_system_manager.run_system_health_checks",
+                return_value=healthy_result,
+            ),
+            patch.object(system, "update_battery_schedule") as mock_update,
+        ):
+            system.refresh_health_check()
+
+        mock_update.assert_not_called()
 
 
 class TestHealthRecoveryTracking:
@@ -642,7 +710,6 @@ class TestShouldApplySchedule:
             is_first_run=False,
             period=10,
             prepare_next_day=False,
-            temp_growatt=system._inverter_controller,
             optimization_period=10,
             temp_schedule=None,
         )
@@ -743,3 +810,69 @@ class TestAddTimestampsToPeriodData:
         for pd in result.period_data:
             assert pd.timestamp is not None
             assert pd.timestamp.date() == expected_date
+
+
+class TestNotApplyBranchRefreshesCurrentSchedule:
+    """Regression for issue #369 finding 1.
+
+    _apply_period_schedule (called every cycle, apply or not) reads
+    self._inverter_controller.current_schedule.actions to compute the
+    hardware battery_action_kw for the current period. Before the
+    InverterController-recreation refactor, the not-apply branch swapped in
+    a whole new controller object whose current_schedule had already been
+    set by create_schedule(); that refresh was lost when the branch was
+    rewritten to update fields individually. If current_schedule isn't
+    explicitly refreshed on the not-apply path, every not-apply cycle writes
+    hardware commands computed from a stale, previously-applied schedule's
+    action values instead of the freshly computed ones.
+    """
+
+    def test_current_schedule_refreshed_when_schedule_not_applied(self, system):
+        first_schedule = MagicMock(actions=[1.0, 2.0], strategic_intents=["IDLE"])
+        second_schedule = MagicMock(actions=[5.0, 6.0], strategic_intents=["IDLE"])
+
+        with (
+            patch.object(system, "_handle_special_cases"),
+            patch.object(
+                system, "_get_price_data", return_value=([1.0], [MagicMock()])
+            ),
+            patch.object(system, "_update_energy_data"),
+            patch.object(system, "_get_current_battery_soc", return_value=50.0),
+            patch.object(
+                system, "_gather_optimization_data", return_value=(0, MagicMock())
+            ),
+            patch.object(system, "_run_optimization", return_value=MagicMock()),
+            patch.object(
+                system,
+                "_create_updated_schedule",
+                side_effect=[first_schedule, second_schedule],
+            ),
+            patch.object(
+                system,
+                "_should_apply_schedule",
+                side_effect=[(True, "first: applied"), (False, "second: no change")],
+            ),
+            patch.object(system, "_apply_schedule") as mock_apply_schedule,
+            patch.object(system, "_apply_period_schedule"),
+            patch.object(system, "_capture_prediction_snapshot"),
+            patch.object(system, "log_battery_schedule"),
+        ):
+            # First cycle: should_apply=True. _apply_schedule is mocked out
+            # (its internals are not under test here), so emulate the one
+            # side effect this test cares about: it sets current_schedule.
+            def fake_apply_schedule(*_args, **_kwargs):
+                system._inverter_controller.current_schedule = first_schedule
+
+            mock_apply_schedule.side_effect = fake_apply_schedule
+
+            assert system.update_battery_schedule(0, prepare_next_day=False) is True
+            assert system._inverter_controller.current_schedule is first_schedule
+
+            # Second cycle: should_apply=False (TOU/VPP intents unchanged),
+            # but the DP produced different action magnitudes. The not-apply
+            # branch must still refresh current_schedule so the next
+            # _apply_period_schedule call reads the fresh actions.
+            assert system.update_battery_schedule(1, prepare_next_day=False) is True
+
+        assert system._inverter_controller.current_schedule is second_schedule
+        assert system._inverter_controller.current_schedule.actions == [5.0, 6.0]

@@ -171,7 +171,7 @@ class StoredSchedule:
 
 **Per-period control** (shared across all platforms): At each 15-minute period boundary, `_write_period_to_hardware()` issues generic HA entity calls:
 - `switch.turn_on` / `switch.turn_off` — grid charge enable/disable
-- `number.set_value` — charge/discharge power rate
+- `number.set_value` (or `input_number.set_value` if the configured entity is a user-provided `input_number.*` helper) — charge/discharge power rate
 
 These resolve to platform-specific entities via the sensor config (e.g. `grid_charge` → `switch.rkm…_charge_from_grid` on Growatt cloud, or `switch.solax_charger_switch` on solax_modbus).
 
@@ -402,6 +402,7 @@ The system supports multiple inverter platforms, each with a dedicated controlle
 | `growatt_solax_modbus` | Growatt MIC/MIN/MOD/MID | `solax_modbus` (local Modbus) | TOU entity writes | `SolaxModbusGrowattController` |
 | `growatt_sph` | Growatt SPH | `growatt_server` (cloud) | AC charge/discharge periods | `GrowattSphController` |
 | `solax` | SolaX | `solax_modbus` (local Modbus) | VPP active-power commands | `SolaxController` |
+| `huawei_solar_luna2000` | Huawei LUNA2000 | `huawei_solar` (local Modbus) | TOU period-list writes | `HuaweiController` |
 
 The active platform is stored in `inverter.platform`. Switching platform at runtime calls `BatterySystemManager.switch_inverter_platform()`, which destroys the current `InverterController` and creates the correct subclass. No restart is required.
 
