@@ -43,7 +43,6 @@ SolaX's autorepeat duration.
 
 import logging
 import time
-from typing import ClassVar
 
 from . import time_utils
 from .dp_schedule import DPSchedule
@@ -69,14 +68,6 @@ class SolaxModbusGrowattController(GrowattMinController):
     hardware, with ``write_to_hardware`` doing only the one-time VPP
     enable sequence.
     """
-
-    # TOU mode's per-period write goes through the inherited base
-    # _write_period_to_hardware() (#166 comment above _apply_period_tou):
-    # writes unconditionally rather than gating on the last-written value,
-    # since the #166 gate-removal is itself an active real-hardware test on
-    # GEN4. Do not let GrowattMinController's dedupe_register_writes (#402,
-    # cloud-only) silently re-gate this.
-    dedupe_register_writes: ClassVar[bool] = False
 
     def __init__(
         self, battery_settings: BatterySettings, control_mode: str = "tou"
@@ -328,20 +319,20 @@ class SolaxModbusGrowattController(GrowattMinController):
     ) -> tuple[bool, str]:
         """Write one period's VPP power command.
 
-        Writes every period while remote control is active, refreshing the
-        fallback timer so the inverter's dead-man's-switch never lapses
-        during a stable run of identical periods (#404). Only skipped when
-        remote control is (and was already) disabled — nothing active, no
-        timer to protect.
+        Only writes when the command actually changes (remote-control state or
+        power level), minimising inverter writes — the fallback timer is
+        rewritten alongside any active command to keep the dead-man's-switch
+        from lapsing during a stable run of identical periods.
         """
         power_pct, remote_control_enabled = self._intent_to_vpp(
             grid_charge, discharge_rate, block_passive_charging
         )
 
-        needs_write = remote_control_enabled or (
+        command_changed = (
             remote_control_enabled != self._last_written_vpp_remote_control
+            or (remote_control_enabled and power_pct != self._last_written_vpp_power)
         )
-        if not needs_write:
+        if not command_changed:
             return True, ""
 
         try:
