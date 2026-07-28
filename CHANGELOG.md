@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
+## [9.9.0b27] - 2026-07-28
+
+Everything else accumulated in `Unreleased` on main already shipped in `v9.9.0b26`. This release covers only what's genuinely new since `v9.9.0b26`.
+
+### Fixed
+
+- **Growatt VPP mode forced a fixed discharge rate for `LOAD_SUPPORT`, causing unnecessary grid imports/exports whenever the load prediction missed** — `SolaxModbusGrowattController._intent_to_vpp()` mapped `LOAD_SUPPORT` into the same branch as `BATTERY_EXPORT` (grid_first at a forced negative power percentage), with no path to release control the way TOU mode's `load_first` mapping already does for the same intent — VPP mode had no way to distinguish the two once `_map_intent_to_rates()` collapsed them to identical `(grid_charge, discharge_rate)` values. `LOAD_SUPPORT` now releases VPP control entirely (`vpp_remote_control` disabled), falling back to the inverter's own load-following self-consumption, exactly like TOU's `load_first`; `BATTERY_EXPORT` is unaffected. Threading the distinction through required a new `strategic_intent` parameter on `apply_period()` (base `InverterController` + `SolaxModbusGrowattController`, same pattern as the existing `block_passive_charging` param added for #355), carried through `BatterySystemManager`'s three call sites (`_apply_period_schedule`, the period-write retry path, `apply_discharge_inhibit`). Reported independently by @nholmgaard and @ridax67 testing real Growatt MIN/inverter hardware on b26; confirmed live via mock-HA E2E against a real DP-optimized schedule. ([#413](https://github.com/johanzander/bess-manager/issues/413))
+
 ## [9.9.0b26] - 2026-07-27
 
 Everything else accumulated in `Unreleased` on main already shipped in `v9.9.0b25`. This release covers only what's genuinely new since `v9.9.0b25`.
