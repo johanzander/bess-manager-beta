@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
+## [9.9.0b28] - 2026-07-29
+
+Everything else accumulated in `Unreleased` on main already shipped in `v9.9.0b27`. This release covers only what's genuinely new since `v9.9.0b27`.
+
+### Fixed
+
+- **"Incomplete Historical Data" banner reappeared after dismissing it, on refresh, navigation, or within a minute of staying on the page** — Unlike the other dashboard banners (runtime failures, health recoveries), its dismissed state lived only in a React `useState` in `DashboardPage`, and the 60-second dashboard poll explicitly reset that flag back to `false` on every fetch where the API still reported incomplete data. Dismissal is now tracked server-side (`BatterySystemManager.dismiss_historical_data_warning`/`is_historical_data_warning_dismissed`, exposed via `GET /api/historical-data-status`'s new `dismissed` field and `POST /api/historical-data-status/dismiss`), matching the existing runtime-failures/health-recoveries pattern. The dismissal is keyed to today's date plus the exact set of missing hours, so a new gap — or the same gap recurring on a later day — still surfaces the banner.
+
 ## [9.9.0b27] - 2026-07-28
 
 Everything else accumulated in `Unreleased` on main already shipped in `v9.9.0b26`. This release covers only what's genuinely new since `v9.9.0b26`.
