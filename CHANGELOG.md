@@ -6,19 +6,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
+## [10.1.0b1] - 2026-08-03
+
+Beta's last release (`v9.9.0b29`) was cut before `v10.0.0` shipped on stable, so this release brings beta fully up to date with `v10.0.0` and `v10.0.1`, plus everything new since.
+
 ### Added
 
 - **Inverter service domain is now configurable** — a compatible integration exposing the same TOU services under its own domain works as a setting instead of needing a new BESS platform. ([#412](https://github.com/johanzander/bess-manager/pull/412))
+- New inverter platforms: **Solis** (`solis_modbus`) ([#130](https://github.com/johanzander/bess-manager/issues/130)), **Huawei LUNA2000** ([#120](https://github.com/johanzander/bess-manager/issues/120)), and a **Growatt VPP control mode** for `solax_modbus` (GEN3/GEN4) ([#118](https://github.com/johanzander/bess-manager/issues/118)) as an alternative to persistent TOU scheduling. All experimental, not yet fully real-world validated.
+- **ENTSO-e / Belpex price provider** ([#208](https://github.com/johanzander/bess-manager/pull/208)), plus a **multiplicative spot-price adjustment** (`spot_multiplier`/`export_spot_multiplier`) for contracts that scale the raw spot price rather than adding a flat markup ([#221](https://github.com/johanzander/bess-manager/issues/221), [#227](https://github.com/johanzander/bess-manager/pull/227)).
+- **Solar-clipping-aware optimization** *(opt-in)* — models a hybrid inverter's AC power cap so the optimizer stops over-filling the battery and clipping the midday solar peak.
+- **Daily savings history** with week/month/year aggregates, plus a redesigned Savings page (Day/Month/Year drill-down, Tibber-style history browsing) and a new **Net Grid Cost** headline (wear-free import − export) separate from battery wear reporting. ([#260](https://github.com/johanzander/bess-manager/pull/260))
+- **Self-resolved health-check recovery banner** — surfaces when a sensor that briefly errored has since recovered on its own. ([#215](https://github.com/johanzander/bess-manager/issues/215), [#239](https://github.com/johanzander/bess-manager/pull/239))
+- Setpoint writes now support `input_number.*` entities, not just `number.*`. ([#372](https://github.com/johanzander/bess-manager/issues/372))
 
-### Fixed
+### Changed
 
-- Huawei TOU writes no longer fail on installs with no working-mode select (e.g. behind an EMMA energy manager); the health check reports this explicitly. ([#412](https://github.com/johanzander/bess-manager/pull/412))
-- Editing the Huawei battery Device ID in Settings now saves to the inverter section and applies without a restart, instead of being written to the Growatt section.
-### Fixed
-
-- The consumption forecast now refreshes intraday like solar already does, instead of caching stale data until the 23:55 job. ([#395](https://github.com/johanzander/bess-manager/issues/395))
-- Inverter schedule display no longer shows a fictional TOU mode label for VPP/period-list-controlled installs. ([#415](https://github.com/johanzander/bess-manager/issues/415))
-- **A silently dropped quarterly schedule-update tick permanently lost a period's actuals with no trace it ever happened** — the missed tick is now logged and surfaced as a runtime failure. ([#403](https://github.com/johanzander/bess-manager/issues/403))
+- **DP optimizer now uses pure backward induction** instead of ad hoc profitability floors and an anti-cycling special case — Bellman's principle already makes the hold-vs-discharge call correctly; equal-or-better economics on all pinned fixtures. ([#253](https://github.com/johanzander/bess-manager/pull/253))
+- Battery SOC/Energy Flow chart now splits charging and discharging by source (Solar→Battery vs Grid→Battery, Battery→Home vs Battery→Grid).
 
 ### Removed
 
@@ -26,8 +31,35 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ### Fixed
 
+- Huawei TOU writes no longer fail on installs with no working-mode select (e.g. behind an EMMA energy manager); the health check reports this explicitly. ([#412](https://github.com/johanzander/bess-manager/pull/412))
+- Editing the Huawei battery Device ID in Settings now saves to the inverter section and applies without a restart, instead of being written to the Growatt section.
+- The consumption forecast now refreshes intraday like solar already does, instead of caching stale data until the 23:55 job. ([#395](https://github.com/johanzander/bess-manager/issues/395))
+- Inverter schedule display no longer shows a fictional TOU mode label for VPP/period-list-controlled installs. ([#415](https://github.com/johanzander/bess-manager/issues/415))
+- **A silently dropped quarterly schedule-update tick permanently lost a period's actuals with no trace it ever happened** — the missed tick is now logged and surfaced as a runtime failure. ([#403](https://github.com/johanzander/bess-manager/issues/403))
 - The "Enable Live Control" pre-flight dialog showed a green check for optional components that were genuinely failing (e.g. a misconfigured InfluxDB), not just ones left unconfigured. Those now show an amber warning — they still never block enabling live control.
 - Settings → Savings History silently displayed "0 days recorded" when the disk-usage request failed, and swallowed errors when clearing the history. Both now surface the actual error.
+- `HuaweiController.sync_soc_limits` now reads before writing SOC limits, instead of writing unconditionally on every sync. ([#427](https://github.com/johanzander/bess-manager/issues/427))
+- A failed startup timezone fetch now surfaces on the runtime-failures banner instead of silently falling back to `Europe/Stockholm`. ([#440](https://github.com/johanzander/bess-manager/issues/440))
+- The Runtime Errors panel no longer shows a blank "Error:" line; it now shows the real message and occurrence count. ([#60](https://github.com/johanzander/bess-manager/issues/60))
+- "Report a Problem" → "File GitHub Issue" no longer gets silently dropped by popup blockers. ([#60](https://github.com/johanzander/bess-manager/issues/60))
+- **Default InfluxDB bucket pointed at a nonexistent database, and InfluxDB errors hid their real cause** — Corrected the default bucket name and included the response body in all error messages. ([#434](https://github.com/johanzander/bess-manager/pull/434))
+- **DP economics**: several optimizer bugs that made the battery hold, export, or discharge sub-optimally — a terminal-value cap using an already-committed near-term price (root cause of the long-reported "tonight exports, tomorrow evening doesn't" issue, [#422](https://github.com/johanzander/bess-manager/issues/422)/[#126](https://github.com/johanzander/bess-manager/issues/126)), a continuation-value flattening below the SOE floor ([#336](https://github.com/johanzander/bess-manager/issues/336)), a flat-export-tariff market never storing surplus solar ([#359](https://github.com/johanzander/bess-manager/issues/359)), a missing SOLAR_EXPORT-below-max alternative causing mistimed exports ([#313](https://github.com/johanzander/bess-manager/issues/313)), and a coarser action-search grid missing the true optimum ([#282](https://github.com/johanzander/bess-manager/issues/282), [#284](https://github.com/johanzander/bess-manager/pull/284)).
+- **Dashboard/reporting accuracy**: a nightly (23:55) job that corrupted the last few periods of "today" and briefly showed a false "missing historical data" banner ([#380](https://github.com/johanzander/bess-manager/issues/380)); a stuck "Initializing" state after a startup race with unavailable sensors; several small-magnitude data-integrity issues in energy-flow attribution ([#342](https://github.com/johanzander/bess-manager/pull/342), [#350](https://github.com/johanzander/bess-manager/issues/350)).
+- **Settings persistence**: several fields could silently revert to defaults on restart due to duplicated camelCase/snake_case translation logic — settings now use one canonical format end-to-end ([#126](https://github.com/johanzander/bess-manager/issues/126), [#197](https://github.com/johanzander/bess-manager/issues/197), [#219](https://github.com/johanzander/bess-manager/issues/219), [#216](https://github.com/johanzander/bess-manager/pull/216), [#224](https://github.com/johanzander/bess-manager/pull/224)); a live edit to Max Charge/Discharge Power in Settings also wasn't picked up by the already-running inverter controller until a restart ([#398](https://github.com/johanzander/bess-manager/issues/398)).
+- **Growatt cloud sent redundant register writes even when nothing had changed** — a likely contributor to `GrowattV1ApiError` write failures seen in HA logs. ([#402](https://github.com/johanzander/bess-manager/pull/402))
+- **Native SolaX hardware never got Min SOC written to it** — the software-side floor was always respected, but the inverter itself had no independent backstop if the plan was ever bypassed. ([#337](https://github.com/johanzander/bess-manager/issues/337))
+- **Growatt TOU begin/end window could silently fail to update** (wrong HA entity domain for those fields), reverting the inverter to Load First outside its intended window. ([#362](https://github.com/johanzander/bess-manager/issues/362), [#181](https://github.com/johanzander/bess-manager/issues/181))
+- **Runtime energy tracking had no correction for zero-resolution counter gaps**, occasionally misattributing energy to the wrong period and skewing cost-basis/savings figures. ([#387](https://github.com/johanzander/bess-manager/issues/387))
+- **`SOLAR_STORAGE` periods forced a full grid import on any real-time load spike**, even with battery headroom available to cover it. ([#318](https://github.com/johanzander/bess-manager/issues/318))
+- **A failed hardware schedule write could be silently logged as successful and never retried**, permanently drifting the dashboard from the real inverter state. ([#365](https://github.com/johanzander/bess-manager/issues/365))
+- **Dashboard Net Cost/Savings only counted today's slice of a 2-day optimization plan**, making a correctly deferred decision (e.g. holding charge for a better price tomorrow) look like a loss. ([#287](https://github.com/johanzander/bess-manager/issues/287))
+- Locale/regional fixes: Solcast auto-discovery breaking under non-English HA locales ([#218](https://github.com/johanzander/bess-manager/issues/218), [#223](https://github.com/johanzander/bess-manager/pull/223)); setup wizard discovering the wrong (off-grid) SOC-limit sensor ([#270](https://github.com/johanzander/bess-manager/issues/270), [#277](https://github.com/johanzander/bess-manager/pull/277)); per-currency default cycle cost instead of a hardcoded SEK value ([#237](https://github.com/johanzander/bess-manager/pull/237)).
+- Various smaller UI fixes: dark-mode date picker; hourly-resolution period labels ([#126](https://github.com/johanzander/bess-manager/issues/126)); stale live sensor values shown instead of current readings ([#271](https://github.com/johanzander/bess-manager/issues/271)).
+
+### Internal
+
+- Vectorized the DP backward-induction hot loop with numpy (~115x faster). ([#236](https://github.com/johanzander/bess-manager/issues/236), [#278](https://github.com/johanzander/bess-manager/pull/278))
+- Debug bundle export improvements: previous-day data included ([#335](https://github.com/johanzander/bess-manager/issues/335)), fuller entity/state snapshots for replay fidelity ([#332](https://github.com/johanzander/bess-manager/pull/332)), timezone parsing fix for `mock-run.sh` replay.
 
 ## [10.0.1] - 2026-08-02
 
