@@ -127,6 +127,10 @@ class BatterySettings:
     efficiency_discharge: float = BATTERY_EFFICIENCY_DISCHARGE
     inverter_max_ac_power_kw: float = INVERTER_MAX_AC_POWER_KW
     inverter_ac_power_margin: float = INVERTER_AC_POWER_MARGIN
+    # PV export-limit curtailment (issue #269) — opt-in, requires a grid
+    # CT/smart meter and a platform with supports_export_limit_control.
+    export_curtailment_enabled: bool = False
+    export_curtailment_price_floor: float = 0.0
     reserved_capacity: float = field(init=False)
     min_soe_kwh: float = field(init=False)
     max_soe_kwh: float = field(init=False)
@@ -204,6 +208,22 @@ class HomeSettings:
             1,
             3,
         ), f"phase_count must be 1 or 3, got {self.phase_count}"
+        if self.power_monitoring_enabled:
+            if self.max_fuse_current <= 0:
+                raise ValueError(
+                    f"max_fuse_current must be positive when power_monitoring_enabled, "
+                    f"got {self.max_fuse_current}"
+                )
+            if self.voltage <= 0:
+                raise ValueError(
+                    f"voltage must be positive when power_monitoring_enabled, "
+                    f"got {self.voltage}"
+                )
+            if self.safety_margin <= 0:
+                raise ValueError(
+                    f"safety_margin must be positive when power_monitoring_enabled, "
+                    f"got {self.safety_margin}"
+                )
 
     def update(self, **kwargs: Any) -> None:
         """Update settings from a snake_case dict — the store's native format.
