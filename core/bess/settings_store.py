@@ -88,6 +88,24 @@ SHARED_SENSOR_KEYS = frozenset(
     }
 )
 
+# The HA integration domain each platform's *vendor* service calls target.
+# Only two platforms make any: huawei_solar.set_tou_periods and the
+# growatt_server TOU/AC-charge services. Every other service call BESS makes
+# infers its domain from the entity_id prefix (number vs input_number, switch
+# vs select) — these two target a device, so there is no prefix to read.
+# "" means the platform drives entities directly and calls no vendor service.
+# Overridable per install via inverter.service_domain, for integrations that
+# expose the same services under a different domain name (PR #412).
+PLATFORM_SERVICE_DOMAIN = {
+    "growatt_server_min": "growatt_server",
+    "growatt_server_sph": "growatt_server",
+    "solax_modbus_growatt_min": "",
+    "solax_modbus_growatt_sph": "",
+    "solax_modbus_native": "",
+    "solis_modbus": "",
+    "huawei_solar_luna2000": "huawei_solar",
+}
+
 
 class SettingsStore:
     """Read/write /data/bess_settings.json with atomic writes.
@@ -171,6 +189,21 @@ class SettingsStore:
                 self.data[section] = dict(data[section])
         self._write(self.data)
         logger.info("Saved all settings to %s", SETTINGS_PATH)
+
+    def get_service_domain(self) -> str:
+        """Return the HA integration domain for this install's vendor service calls.
+
+        ``inverter.service_domain`` is an override: when empty (the normal
+        case, and the state of every install predating the field) the
+        configured platform's standard domain from PLATFORM_SERVICE_DOMAIN
+        applies. Returns "" for platforms that make no vendor service calls
+        and for an unconfigured install.
+        """
+        inverter = self.data.get("inverter", {})
+        override = str(inverter.get("service_domain", "") or "").strip()
+        if override:
+            return override
+        return PLATFORM_SERVICE_DOMAIN.get(inverter.get("platform", ""), "")
 
     def get_active_sensors(self) -> dict:
         """Return a flat sensor dict merging the active platform's sensors with shared sensors.
@@ -377,7 +410,6 @@ class SettingsStore:
             BATTERY_CHARGE_CYCLE_COST,
             BATTERY_MAX_CHARGE_DISCHARGE_POWER_KW,
             BATTERY_MAX_SOC,
-            BATTERY_MIN_ACTION_PROFIT_THRESHOLD,
             BATTERY_MIN_SOC,
             BATTERY_STORAGE_SIZE_KWH,
             DEFAULT_AREA,
@@ -402,7 +434,6 @@ class SettingsStore:
                 "max_charge_power_kw": BATTERY_MAX_CHARGE_DISCHARGE_POWER_KW,
                 "max_discharge_power_kw": BATTERY_MAX_CHARGE_DISCHARGE_POWER_KW,
                 "cycle_cost_per_kwh": BATTERY_CHARGE_CYCLE_COST,
-                "min_action_profit_threshold": BATTERY_MIN_ACTION_PROFIT_THRESHOLD,
             },
             "home": {
                 "default_hourly": HOME_HOURLY_CONSUMPTION_KWH,
@@ -432,7 +463,12 @@ class SettingsStore:
                 "entsoe": {"entity": ""},
             },
             "growatt": {"inverter_type": "", "device_id": ""},
-            "inverter": {"platform": "", "device_id": "", "control_mode": "tou"},
+            "inverter": {
+                "platform": "",
+                "device_id": "",
+                "control_mode": "tou",
+                "service_domain": "",
+            },
             "sensors": {
                 "platform": "",
                 "growatt_server_min": {},
@@ -457,7 +493,6 @@ class SettingsStore:
             BATTERY_DEFAULT_CHARGING_POWER_RATE,
             BATTERY_EFFICIENCY_CHARGE,
             BATTERY_EFFICIENCY_DISCHARGE,
-            BATTERY_MIN_ACTION_PROFIT_THRESHOLD,
             EXPORT_SPOT_MULTIPLIER,
             INVERTER_AC_POWER_MARGIN,
             INVERTER_MAX_AC_POWER_KW,
@@ -492,10 +527,25 @@ class SettingsStore:
                 )
                 changed = True
 
+            # Drop: min_action_profit_threshold.  The DP's profit-threshold
+            # gate was removed in the Bellman-optimality guardrail refactor,
+            # and the field is gone from BatterySettings.
+            #
+            # Not load-bearing for startup: build_system_settings() filters the
+            # battery section to BATTERY_MODEL_ATTRS (derived from the
+            # dataclass), so a leftover key is dropped there and never reaches
+            # BatterySettings.update().  This strip is hygiene — bess_settings.json
+            # is user-visible and hand-editable, and a key that silently does
+            # nothing invites someone to tune it.
+            if battery.pop("min_action_profit_threshold", None) is not None:
+                logger.info(
+                    "Schema migration: removed obsolete battery.min_action_profit_threshold"
+                )
+                changed = True
+
             # Add missing fields with defaults
             for key, default in (
                 ("cycle_cost_per_kwh", BATTERY_CHARGE_CYCLE_COST),
-                ("min_action_profit_threshold", BATTERY_MIN_ACTION_PROFIT_THRESHOLD),
                 ("charging_power_rate", BATTERY_DEFAULT_CHARGING_POWER_RATE),
                 ("efficiency_charge", BATTERY_EFFICIENCY_CHARGE),
                 ("efficiency_discharge", BATTERY_EFFICIENCY_DISCHARGE),

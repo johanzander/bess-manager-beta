@@ -1,6 +1,6 @@
 name: "BESS Manager (Beta)"
 description: "Battery Energy Storage System optimization and management"
-version: "9.9.0b29"
+version: "10.1.0b1"
 slug: "bess_manager_beta"
 image: "ghcr.io/johanzander/bess-manager-beta-{arch}"
 init: false
@@ -22,7 +22,7 @@ auth_api: true
 options:
   influxdb:
     url: "http://homeassistant.local:8086/api/v2/query"
-    bucket: "home_assistant/autogen"
+    bucket: "homeassistant/autogen"
     username: "your_db_username_here"
     password: "your_db_password_here"
 schema:

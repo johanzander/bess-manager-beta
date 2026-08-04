@@ -13,6 +13,7 @@ import log_config as _  # noqa: F401
 # Import endpoints router
 from api import router as endpoints_router
 from api_conversion import build_system_settings
+from apscheduler.events import EVENT_JOB_MISSED
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from fastapi import FastAPI
@@ -139,19 +140,11 @@ class BESSController:
         inverter_config = merged.get("inverter", {})
         huawei_device_id = inverter_config.get("device_id")
         self.ha_controller = self._init_ha_controller(
-            sensor_config, growatt_device_id, huawei_device_id
+            sensor_config,
+            growatt_device_id,
+            huawei_device_id,
+            self.settings_store.get_service_domain(),
         )
-
-        # Set timezone from HA config before any BESS modules use it
-        try:
-            ha_config = self.ha_controller.get_ha_config()
-            ha_timezone = ha_config["time_zone"]
-            from core.bess.time_utils import set_timezone
-
-            set_timezone(ha_timezone)
-            logger.info(f"Timezone set from HA: {ha_timezone}")
-        except Exception as e:
-            logger.warning(f"Could not read timezone from HA, using default: {e}")
 
         # Enable test mode from environment variable OR persisted demo_mode setting.
         # Environment variable takes precedence (for dev/CI use).
@@ -181,6 +174,22 @@ class BESSController:
             addon_options=merged,
         )
 
+        # Set timezone from HA config before any BESS modules use it. This
+        # runs after BatterySystemManager construction (above) so that
+        # ha_controller.failure_tracker is already wired to a real
+        # RuntimeFailureTracker — a final-attempt HA API failure here then
+        # surfaces on the existing dashboard banner instead of only being
+        # logged (#440).
+        try:
+            ha_config = self.ha_controller.get_ha_config()
+            ha_timezone = ha_config["time_zone"]
+            from core.bess.time_utils import set_timezone
+
+            set_timezone(ha_timezone)
+            logger.info(f"Timezone set from HA: {ha_timezone}")
+        except Exception as e:
+            logger.warning(f"Could not read timezone from HA, using default: {e}")
+
         # Create scheduler with increased misfire grace time to avoid unnecessary warnings
         self.scheduler = BackgroundScheduler(
             {
@@ -203,7 +212,11 @@ class BESSController:
         logger.info("BESS Controller initialized with early settings loading")
 
     def _init_ha_controller(
-        self, sensor_config, growatt_device_id=None, huawei_device_id=None
+        self,
+        sensor_config,
+        growatt_device_id=None,
+        huawei_device_id=None,
+        service_domain=None,
     ):
         """Initialize Home Assistant API controller based on environment.
 
@@ -211,6 +224,7 @@ class BESSController:
             sensor_config: Sensor configuration dictionary to use for the controller.
             growatt_device_id: Growatt device ID for TOU segment operations.
             huawei_device_id: Huawei device ID for battery operations.
+            service_domain: HA integration domain for vendor service calls.
         """
         ha_token = os.getenv("HASSIO_TOKEN")
         if ha_token:
@@ -229,6 +243,7 @@ class BESSController:
             sensor_config=sensor_config,
             growatt_device_id=growatt_device_id,
             huawei_device_id=huawei_device_id,
+            service_domain=service_domain,
         )
 
     def _load_options(self):
@@ -272,6 +287,18 @@ class BESSController:
         """
         active = self.settings_store.get_active_sensors()
         self.ha_controller.sensors = {k: v for k, v in active.items() if v}
+
+    def refresh_service_domain(self) -> None:
+        """Sync the live ha_controller.service_domain from persisted settings.
+
+        Like ha_controller.sensors, this is a plain copy taken at init — an
+        inverter platform switch changes which vendor domain the platform
+        resolves to, and an explicit inverter.service_domain override
+        changes it directly. Call this after any settings mutation that can
+        touch the inverter section, or vendor service calls keep targeting
+        the previous integration until the next restart.
+        """
+        self.ha_controller.service_domain = self.settings_store.get_service_domain()
 
     def apply_discovered_config(
         self,
@@ -325,6 +352,26 @@ class BESSController:
         self._init_scheduler_jobs()
         logger.info("Scheduler started")
 
+    def _on_job_missed(self, event) -> None:
+        """Surface a coalesced scheduler misfire that would otherwise be silent.
+
+        APScheduler's default coalesce=True drops a missed fire time with no
+        log line at all (issue #403) — for update_schedule_quarterly this
+        permanently lost a period's actuals with no trace it ever happened.
+        Scoped to that job only; other jobs' misfires are not this issue.
+        """
+        if event.job_id != "update_schedule_quarterly":
+            return
+        logger.warning(
+            f"Scheduled job '{event.job_id}' missed its "
+            f"{event.scheduled_run_time:%H:%M} run — previous run still busy, "
+            "misfire coalesced away"
+        )
+        self.system.record_scheduler_misfire(
+            job_id=event.job_id,
+            scheduled_run_time=event.scheduled_run_time,
+        )
+
     def _init_scheduler_jobs(self):
         """Configure scheduler jobs."""
 
@@ -337,8 +384,10 @@ class BESSController:
         self.scheduler.add_job(
             update_schedule_quarterly,
             CronTrigger(minute="0,15,30,45"),
+            id="update_schedule_quarterly",
             misfire_grace_time=30,  # Allow 30 seconds of misfire before warning
         )
+        self.scheduler.add_listener(self._on_job_missed, EVENT_JOB_MISSED)
 
         # Next day preparation (daily at 23:55)
         def prepare_next_day():

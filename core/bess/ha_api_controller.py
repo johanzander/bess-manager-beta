@@ -76,6 +76,7 @@ class HomeAssistantAPIController:
         sensor_config: dict | None = None,
         growatt_device_id: str | None = None,
         huawei_device_id: str | None = None,
+        service_domain: str | None = None,
     ):
         """Initialize the Controller with Home Assistant API access.
 
@@ -85,6 +86,9 @@ class HomeAssistantAPIController:
             sensor_config: Sensor configuration mapping from options.json
             growatt_device_id: Growatt device ID for TOU segment operations
             huawei_device_id: Huawei battery device ID for TOU period operations
+            service_domain: HA integration domain for vendor service calls
+                (SettingsStore.get_service_domain() — "huawei_solar",
+                "growatt_server", or a compatible integration's own domain)
 
         """
         self.base_url = ha_url
@@ -105,6 +109,12 @@ class HomeAssistantAPIController:
 
         # Store Huawei battery device ID for TOU period operations
         self.huawei_device_id = huawei_device_id
+
+        # HA integration domain for vendor service calls (set_tou_periods,
+        # update_time_segment, ...). Every other service call infers its
+        # domain from the entity_id prefix; these target a device, so the
+        # domain is configuration — see SettingsStore.get_service_domain.
+        self.service_domain = service_domain or ""
 
         # Runtime failure tracker (injected by BatterySystemManager)
         self.failure_tracker = None
@@ -873,6 +883,20 @@ class HomeAssistantAPIController:
         # This ensures proper sensor mapping and prevents silent failures
         raise ValueError(f"No entity ID configured for sensor '{sensor_key}'")
 
+    def is_sensor_configured(self, sensor_key: str) -> bool:
+        """Report whether ``sensor_key`` is mapped to a usable entity ID.
+
+        Public predicate for controllers that treat an optional entity's
+        absence as a supported configuration rather than a fault — e.g.
+        HuaweiController skipping the working-mode gate on installs behind
+        an energy manager that exposes no LUNA2000 working-mode select.
+        """
+        try:
+            self._resolve_entity_id(sensor_key)
+        except ValueError:
+            return False
+        return True
+
     def get_method_sensor_info(self, method_name: str) -> dict:
         """Get sensor configuration info for a controller method."""
         method_info = self.METHOD_SENSOR_MAP.get(method_name)
@@ -1077,6 +1101,25 @@ class HomeAssistantAPIController:
 
                     raise  # Re-raise the last exception
 
+    def _vendor_service_domain(self) -> str:
+        """Return the configured vendor integration domain, or raise.
+
+        Raises:
+            SystemConfigurationError: If no domain is configured — the
+                install has no inverter platform selected, so a vendor
+                service call can't be addressed at all.
+        """
+        if not self.service_domain:
+            raise SystemConfigurationError(
+                component="inverter service domain",
+                message=(
+                    "No inverter service domain configured. Run the setup "
+                    "wizard to select an inverter platform, or set the "
+                    "service domain override in Settings."
+                ),
+            )
+        return self.service_domain
+
     def _service_call_with_retry(
         self, service_domain, service_name, operation: str | None = None, **kwargs
     ):
@@ -1092,16 +1135,25 @@ class HomeAssistantAPIController:
             Response from service call or None
 
         """
-        # List of read-only operations that are safe to execute in test mode
-        # In test mode, we block ALL operations EXCEPT these safe reads
-        safe_read_operations = [
-            ("growatt_server", "read_time_segments"),
-            ("growatt_server", "read_ac_charge_times"),
-            ("growatt_server", "read_ac_discharge_times"),
-            ("nordpool", "get_prices_for_date"),
-        ]
-
-        is_safe_read = (service_domain, service_name) in safe_read_operations
+        # Read-only operations that are safe to execute in test mode, and
+        # that HA requires return_response=true for. The vendor reads are
+        # matched by service name against whatever domain this install's
+        # inverter integration uses (self.service_domain), not the literal
+        # "growatt_server" — a compatible integration under a different
+        # domain implements the same services and would otherwise get no
+        # data back, failing in a way that looks like its own fault.
+        vendor_safe_reads = (
+            "read_time_segments",
+            "read_ac_charge_times",
+            "read_ac_discharge_times",
+        )
+        is_vendor_domain = bool(self.service_domain) and (
+            service_domain == self.service_domain
+        )
+        is_safe_read = (service_domain, service_name) == (
+            "nordpool",
+            "get_prices_for_date",
+        ) or (is_vendor_domain and service_name in vendor_safe_reads)
 
         # Test mode blocks ALL operations except safe reads (deny by default)
         if self.test_mode and not is_safe_read:
@@ -1142,11 +1194,7 @@ class HomeAssistantAPIController:
             category=(
                 "battery_control"
                 if service_domain in ["number", "input_number", "switch"]
-                else (
-                    "inverter_control"
-                    if service_domain == "growatt_server"
-                    else "other"
-                )
+                else ("inverter_control" if is_vendor_domain else "other")
             ),
             context=context,
             json=json_data,
@@ -1457,7 +1505,7 @@ class HomeAssistantAPIController:
                 "to configure the inverter."
             )
         self._service_call_with_retry(
-            "huawei_solar",
+            self._vendor_service_domain(),
             "set_tou_periods",
             operation="Write Huawei TOU periods",
             device_id=self.huawei_device_id,
@@ -1501,7 +1549,7 @@ class HomeAssistantAPIController:
 
         enabled_str = "enabled" if enabled else "disabled"
         self._service_call_with_retry(
-            "growatt_server",
+            self._vendor_service_domain(),
             "update_time_segment",
             operation=f"Write TOU segment {segment_id}: {batt_mode} {start_time}-{end_time} ({enabled_str})",
             **service_params,
@@ -1523,7 +1571,7 @@ class HomeAssistantAPIController:
 
             # Call the service and get the response
             result = self._service_call_with_retry(
-                "growatt_server",
+                self._vendor_service_domain(),
                 "read_time_segments",
                 operation=None,
                 **service_params,
@@ -1831,7 +1879,10 @@ class HomeAssistantAPIController:
             )
 
         self._service_call_with_retry(
-            "growatt_server", "write_ac_charge_times", None, **service_params
+            self._vendor_service_domain(),
+            "write_ac_charge_times",
+            None,
+            **service_params,
         )
 
     def read_ac_charge_times(self) -> dict:
@@ -1852,7 +1903,10 @@ class HomeAssistantAPIController:
                 )
 
             result = self._service_call_with_retry(
-                "growatt_server", "read_ac_charge_times", None, **service_params
+                self._vendor_service_domain(),
+                "read_ac_charge_times",
+                None,
+                **service_params,
             )
 
             if result and "service_response" in result:
@@ -1894,7 +1948,10 @@ class HomeAssistantAPIController:
             )
 
         self._service_call_with_retry(
-            "growatt_server", "write_ac_discharge_times", None, **service_params
+            self._vendor_service_domain(),
+            "write_ac_discharge_times",
+            None,
+            **service_params,
         )
 
     def read_ac_discharge_times(self) -> dict:
@@ -1915,7 +1972,10 @@ class HomeAssistantAPIController:
                 )
 
             result = self._service_call_with_retry(
-                "growatt_server", "read_ac_discharge_times", None, **service_params
+                self._vendor_service_domain(),
+                "read_ac_discharge_times",
+                None,
+                **service_params,
             )
 
             if result and "service_response" in result:
@@ -2483,7 +2543,6 @@ class HomeAssistantAPIController:
 
     def discover_ha_metadata(
         self,
-        device_sn: str | None,
         entity_registry: list[dict] | None = None,
     ) -> dict:
         """Discover HA-internal IDs via the WebSocket API.
@@ -2494,7 +2553,6 @@ class HomeAssistantAPIController:
         - Huawei battery device_id (HA device registry ID for service calls)
 
         Args:
-            device_sn: Growatt device serial number to match, or None
             entity_registry: Pre-fetched entity registry list, or None to fetch.
 
         Returns:
@@ -2516,12 +2574,11 @@ class HomeAssistantAPIController:
         )
 
         return self._parse_ha_metadata(
-            device_sn, config_entries_result, devices_result, entity_registry_result
+            config_entries_result, devices_result, entity_registry_result
         )
 
     def _parse_ha_metadata(
         self,
-        device_sn: str | None,
         config_entries_result: list[dict],
         devices_result: list[dict],
         entity_registry_result: list[dict],
@@ -2584,28 +2641,15 @@ class HomeAssistantAPIController:
                 growatt_config_entry_id = entry["entry_id"]
                 break
 
-        # Find growatt device_id from device registry.
-        # Primary: match by config_entry belonging to growatt_server
-        # Fallback: match by identifiers containing the device SN
+        # Find growatt device_id from device registry by matching the
+        # config_entry belonging to growatt_server.  Real HA devices always
+        # carry `config_entries`, so no identifier/serial-number fallback is
+        # needed.
         growatt_device_id: str | None = None
         if growatt_config_entry_id:
             for device in devices_result:
                 if growatt_config_entry_id in device.get("config_entries", []):
                     growatt_device_id = device["id"]
-                    break
-
-        if not growatt_device_id and device_sn:
-            sn_upper = device_sn.upper()
-            for device in devices_result:
-                for ident in device.get("identifiers", []):
-                    if (
-                        isinstance(ident, (list, tuple))
-                        and len(ident) == 2
-                        and str(ident[1]).upper() == sn_upper
-                    ):
-                        growatt_device_id = device["id"]
-                        break
-                if growatt_device_id:
                     break
 
         # Find huawei_solar config_entry_id, then the *battery* device
@@ -2758,7 +2802,7 @@ class HomeAssistantAPIController:
 
         Returns:
             Tuple of (result_dict, states) where result_dict has keys:
-            growatt_found, device_sn, growatt_device_id,
+            growatt_found, growatt_device_id,
             huawei_found, huawei_device_id,
             nordpool_found, nordpool_area, nordpool_config_entry_id,
             octopus_found, detected_inverter_platforms,
@@ -2767,7 +2811,6 @@ class HomeAssistantAPIController:
         """
         result: dict = {
             "growatt_found": False,
-            "device_sn": None,
             "growatt_device_id": None,
             "solax_found": False,
             "solis_found": False,
@@ -2813,13 +2856,8 @@ class HomeAssistantAPIController:
         result["solis_found"] = inverter_detected.get("solis", False)
         result["huawei_found"] = inverter_detected.get("huawei", False)
 
-        # ── States: Growatt device SN, Nordpool area ─────────────────────
+        # ── States: Nordpool area ────────────────────────────────────────
         states = self._fetch_all_states()
-
-        device_sn = self._extract_growatt_device_sn(states)
-        if device_sn:
-            result["growatt_found"] = True
-            result["device_sn"] = device_sn
 
         for state in states:
             entity_id = str(state.get("entity_id", "")).lower()
@@ -2845,9 +2883,7 @@ class HomeAssistantAPIController:
 
         # ── Parse config entries + device registry ────────────────────────
         try:
-            metadata = self._parse_ha_metadata(
-                device_sn, config_entries, devices, registry
-            )
+            metadata = self._parse_ha_metadata(config_entries, devices, registry)
             result["growatt_device_id"] = metadata["growatt_device_id"]
             result["huawei_device_id"] = metadata.get("huawei_device_id")
             result["nordpool_config_entry_id"] = metadata["nordpool_config_entry_id"]
@@ -2919,42 +2955,6 @@ class HomeAssistantAPIController:
         )
         if match:
             return match.group(1).upper()
-        return None
-
-    def _extract_growatt_device_sn(self, states: list[dict]) -> str | None:
-        """Extract Growatt device serial number from entity IDs.
-
-        HA builds entity IDs from the slugified translation name, not the sensor key.
-        The SOC sensor (key="tlx_statement_of_charge") is used as the anchor because
-        it is present on all MIN/TLX inverters and has a stable, distinctive name.
-
-        The translation name was corrected at some point, producing two possible suffixes:
-          sensor.<sn>_statement_of_charge_soc  (old name: "Statement of Charge SOC")
-          sensor.<sn>_state_of_charge_soc      (current name: "State of charge (SoC)")
-
-        Both are handled: "_statement_of_charge" is a substring of the old suffix,
-        and "_state_of_charge_soc" matches the current suffix.
-
-        Assumes the serial number does not contain underscores (consistent with
-        Growatt alphanumeric SN format, e.g. "rkm0d7n04x").
-
-        Args:
-            states: List of state dicts from /api/states
-
-        Returns:
-            Device serial number string, or None if no Growatt entities found
-        """
-        for state in states:
-            entity_id = str(state.get("entity_id", ""))
-            if not entity_id.startswith(("sensor.", "number.", "switch.")):
-                continue
-            if (
-                "_statement_of_charge" in entity_id
-                or "_state_of_charge_soc" in entity_id
-            ):
-                object_id = entity_id.split(".", 1)[1]
-                return object_id.split("_", 1)[0]
-
         return None
 
     def discover_current_sensors(self, states: list[dict]) -> dict[str, str]:

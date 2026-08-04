@@ -43,7 +43,6 @@ _PRE_EXISTING_STORE: dict = {
         "max_charge_power_kw": 5.0,
         "max_discharge_power_kw": 5.0,
         "cycle_cost_per_kwh": 0.3,
-        "min_action_profit_threshold": 0.0,
         "efficiency_charge": 0.97,
         "efficiency_discharge": 0.95,
         "temperature_derating": {"enabled": False, "weather_entity": ""},
@@ -135,7 +134,6 @@ def _full_wizard_payload(**overrides) -> dict:
         "maxSoc": 95.0,
         "maxChargeDischargePower": 15.0,
         "cycleCost": 0.50,
-        "minActionProfitThreshold": 8.0,
         "currency": "SEK",
         "consumption": 3.5,
         "consumptionStrategy": "sensor",
@@ -347,7 +345,6 @@ class TestSetupComplete:
         assert bat["max_charge_power_kw"] == 15.0
         assert bat["max_discharge_power_kw"] == 15.0
         assert bat["cycle_cost_per_kwh"] == 0.50
-        assert bat["min_action_profit_threshold"] == 8.0
 
     def test_battery_preserves_keys_not_in_wizard(self, complete_controller):
         """Keys like efficiency_charge and temperature_derating must survive."""
@@ -517,6 +514,31 @@ class TestSetupComplete:
         call_args = complete_controller.settings_store.save_all.call_args[0][0]
         assert call_args["inverter"]["platform"] == "huawei_solar_luna2000"
         assert call_args["inverter"]["device_id"] == "huawei-dev-456"
+
+    def test_service_domain_override_persisted(self, complete_controller):
+        """An install whose integration exposes the vendor services under its
+        own domain (e.g. huawei_emma_management, PR #412) configures that
+        here rather than needing a separate inverter platform."""
+        _client.post(
+            "/api/setup/complete",
+            json=_full_wizard_payload(
+                inverterPlatform="huawei_solar_luna2000",
+                inverterServiceDomain="huawei_emma_management",
+            ),
+        )
+        call_args = complete_controller.settings_store.save_all.call_args[0][0]
+        assert call_args["inverter"]["service_domain"] == "huawei_emma_management"
+
+    def test_malformed_service_domain_rejected(self, complete_controller):
+        """The value is interpolated into /api/services/<domain>/<service>."""
+        resp = _client.post(
+            "/api/setup/complete",
+            json=_full_wizard_payload(
+                inverterPlatform="huawei_solar_luna2000",
+                inverterServiceDomain="switch.some_entity",
+            ),
+        )
+        assert resp.status_code == 422
 
     def test_growatt_inverter_type_not_written(self, complete_controller):
         """Setup should not write legacy growatt.inverter_type for any platform."""
@@ -841,7 +863,6 @@ class TestDiscoverLocaleDefaults:
         ctrl = _make_discover_controller(store)
         integrations = {
             "growatt_found": False,
-            "device_sn": None,
             "growatt_device_id": None,
             "solax_found": False,
             "nordpool_found": False,
@@ -875,7 +896,6 @@ class TestDiscoverLocaleDefaults:
         ctrl = _make_discover_controller(store)
         integrations = {
             "growatt_found": False,
-            "device_sn": None,
             "growatt_device_id": None,
             "solax_found": False,
             "nordpool_found": True,
@@ -909,7 +929,6 @@ class TestDiscoverLocaleDefaults:
         ctrl = _make_discover_controller(store)
         integrations = {
             "growatt_found": False,
-            "device_sn": None,
             "growatt_device_id": None,
             "solax_found": False,
             "nordpool_found": True,
@@ -940,7 +959,6 @@ class TestDiscoverLocaleDefaults:
         ctrl = _make_discover_controller(store)
         integrations = {
             "growatt_found": False,
-            "device_sn": None,
             "growatt_device_id": None,
             "solax_found": False,
             "nordpool_found": False,
@@ -972,7 +990,6 @@ class TestDiscoverLocaleDefaults:
         ctrl = _make_discover_controller(store)
         integrations = {
             "growatt_found": False,
-            "device_sn": None,
             "growatt_device_id": None,
             "solax_found": False,
             "nordpool_found": False,
@@ -1028,7 +1045,6 @@ class TestDiscoverPricingDefaults:
     def _integrations(self, **overrides) -> dict:
         base = {
             "growatt_found": False,
-            "device_sn": None,
             "growatt_device_id": None,
             "solax_found": False,
             "nordpool_found": False,
