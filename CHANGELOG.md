@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
+## [10.1.0b3] - 2026-08-05
+
+Delta from `v10.1.0b2`.
+
+### Fixed
+
+- Growatt VPP-mode IDLE periods no longer drain the battery for house self-consumption overnight — IDLE now holds the battery via `battery_first` instead of falling back to native self-use. ([#466](https://github.com/johanzander/bess-manager/issues/466))
+- Huawei LUNA2000 installs now auto-discover lifetime solar/battery energy sensors, fixing a false "SYSTEM DEGRADED" health check and zero-valued savings graphs. ([#471](https://github.com/johanzander/bess-manager/issues/471))
+- Local E2E verification for Growatt VPP scenarios now completes a full schedule build instead of failing partway through. ([#469](https://github.com/johanzander/bess-manager/issues/469))
+
 ## [10.1.0b2] - 2026-08-04
 
 Everything else accumulated in `Unreleased` on main already shipped in `v10.1.0b1`. This release covers only what's genuinely new since `v10.1.0b1`.
