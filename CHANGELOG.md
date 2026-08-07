@@ -4,6 +4,14 @@ All notable changes to BESS Battery Manager will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [10.1.0b5] - 2026-08-07
+
+Delta from `v10.1.0b4`.
+
+### Fixed
+
+- Dashboard could crash with "Minified React error #310" during a background data refresh — the timeline's tooltip state hook was declared after two conditional early returns, changing the number of hooks called between renders.
+
 ## [10.1.0b4] - 2026-08-07
 
 Delta from `v10.1.0b3`.
