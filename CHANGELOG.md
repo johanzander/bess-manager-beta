@@ -4,45 +4,13 @@ All notable changes to BESS Battery Manager will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [10.1.0b5] - 2026-08-07
 
-### Added
-
-- **Optional PV export-limit curtailment on negative sell prices** — when enabled and a period is exporting at a sell price below a configurable floor, Growatt GEN2/GEN3/GEN4 hardware (via solax_modbus, with a grid CT/smart meter) now throttles PV production at the panel instead of paying to export. Off by default. ([#269](https://github.com/johanzander/bess-manager/issues/269))
-- **Inverter service domain is now configurable** — a compatible integration exposing the same TOU services under its own domain works as a setting instead of needing a new BESS platform. ([#412](https://github.com/johanzander/bess-manager/pull/412))
-- **Grid connection import capacity modeling** — the DP now caps planned grid import at the house's fuse limit instead of planning unbounded imports, gated on `power_monitoring_enabled`. ([#429](https://github.com/johanzander/bess-manager/issues/429))
+Delta from `v10.1.0b4`.
 
 ### Fixed
 
-- Huawei TOU writes no longer fail on installs with no working-mode select (e.g. behind an EMMA energy manager); the health check reports this explicitly. ([#412](https://github.com/johanzander/bess-manager/pull/412))
-- Editing the Huawei battery Device ID in Settings now saves to the inverter section and applies without a restart, instead of being written to the Growatt section.
-- The Savings chart's bars could flicker invisible in Safari, especially with many thin bars (e.g. quarter-hourly resolution) — Safari fails to reliably anti-alias sub-pixel-width SVG shapes. Bars now use a fixed minimum width so they stay visible regardless of window size.
-- Growatt VPP-mode IDLE periods no longer drain the battery for house self-consumption overnight — IDLE now holds the battery via `battery_first` instead of falling back to native self-use. ([#466](https://github.com/johanzander/bess-manager/issues/466))
-- Near-tied IDLE vs battery-powering decisions now resolve to powering the house (fail-safe when consumption exceeds forecast) instead of IDLE, which hard-disables discharge at the inverter. Deliberate energy-holding periods (genuine arbitrage) are unaffected. ([#466](https://github.com/johanzander/bess-manager/issues/466))
-- Huawei LUNA2000 installs now auto-discover lifetime solar/battery energy sensors, fixing a false "SYSTEM DEGRADED" health check and zero-valued savings graphs. ([#471](https://github.com/johanzander/bess-manager/issues/471))
-- **Local E2E verification for Growatt VPP scenarios now completes a full schedule build** instead of failing partway through. ([#469](https://github.com/johanzander/bess-manager/issues/469))
-- Solis installs now auto-configure grid export power, derived from the same signed sensor as import power. Previously export power was always unconfigured. ([#475](https://github.com/johanzander/bess-manager/issues/475))
-- Huawei LUNA2000 installs now auto-discover all sensors (SOC, battery control, power monitoring) instead of requiring manual entity entry for every field, and gain real-time solar/grid power monitoring. ([#438](https://github.com/johanzander/bess-manager/issues/438))
-- **Growatt VPP Remote Control no longer keeps overriding the inverter after switching away from VPP mode** — switching control mode to TOU, or switching to a different inverter platform entirely, now disables the VPP override automatically. ([#479](https://github.com/johanzander/bess-manager/issues/479))
-- **Dashboard timeline no longer shows a stale intent (e.g. "Selling to Grid") for an elapsed hour that actually executed differently** — the color bar now always reflects true per-quarter data. ([#486](https://github.com/johanzander/bess-manager/issues/486))
-- **Near-tied grid-DP decisions could resolve to a suboptimal schedule** — those windows are now re-solved exactly with a windowed piecewise-linear solver instead of relying on the fast DP's approximation alone. ([#450](https://github.com/johanzander/bess-manager/issues/450))
-- The schedule table showed SOLAR_STORAGE/GRID_CHARGING/LOAD_SUPPORT labels with the kWh amount hidden as "--" for small-but-real periods (0.01–0.1 kWh) — the frontend's display threshold is now aligned with the backend's classification threshold. ([#484](https://github.com/johanzander/bess-manager/issues/484))
-- **Power monitoring could be enabled without the phase-current sensors it needs, crash-looping the schedule updater while the health check reported "OK"** — enabling it now requires those sensors to be mapped, at the settings UI, setup wizard, and API layers, and the health check flags the gap if it occurs anyway. ([#492](https://github.com/johanzander/bess-manager/issues/492))
 - Dashboard could crash with "Minified React error #310" during a background data refresh — the timeline's tooltip state hook was declared after two conditional early returns, changing the number of hooks called between renders.
-### Fixed
-
-- The consumption forecast now refreshes intraday like solar already does, instead of caching stale data until the 23:55 job. ([#395](https://github.com/johanzander/bess-manager/issues/395))
-- Inverter schedule display no longer shows a fictional TOU mode label for VPP/period-list-controlled installs. ([#415](https://github.com/johanzander/bess-manager/issues/415))
-- **A silently dropped quarterly schedule-update tick permanently lost a period's actuals with no trace it ever happened** — the missed tick is now logged and surfaced as a runtime failure. ([#403](https://github.com/johanzander/bess-manager/issues/403))
-
-### Removed
-
-- **"Min Action Profit" setting** — the DP optimizer stopped reading it when the profitability gate was replaced by pure backward induction (v10.0.0), but the field stayed in Settings → Battery and the setup wizard, still describing behaviour ("the optimizer skips cycles where the expected gain is below this value") that no longer happened. Removed from the UI, the settings schema, and the API. Existing configs are migrated automatically; no action needed.
-
-### Fixed
-
-- The "Enable Live Control" pre-flight dialog showed a green check for optional components that were genuinely failing (e.g. a misconfigured InfluxDB), not just ones left unconfigured. Those now show an amber warning — they still never block enabling live control.
-- Settings → Savings History silently displayed "0 days recorded" when the disk-usage request failed, and swallowed errors when clearing the history. Both now surface the actual error.
 
 ## [10.0.1] - 2026-08-02
 
