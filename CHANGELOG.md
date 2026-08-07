@@ -14,6 +14,9 @@ Delta from `v10.1.0b3`.
 - Huawei LUNA2000 installs now auto-discover all sensors (SOC, battery control, power monitoring) instead of requiring manual entity entry for every field, and gain real-time solar/grid power monitoring. ([#438](https://github.com/johanzander/bess-manager/issues/438))
 - **Growatt VPP Remote Control no longer keeps overriding the inverter after switching away from VPP mode** — switching control mode to TOU, or switching to a different inverter platform entirely, now disables the VPP override automatically. ([#479](https://github.com/johanzander/bess-manager/issues/479))
 - **Dashboard timeline no longer shows a stale intent (e.g. "Selling to Grid") for an elapsed hour that actually executed differently** — the color bar now always reflects true per-quarter data. ([#486](https://github.com/johanzander/bess-manager/issues/486))
+- **Near-tied grid-DP decisions could resolve to a suboptimal schedule** — those windows are now re-solved exactly with a windowed piecewise-linear solver instead of relying on the fast DP's approximation alone. ([#450](https://github.com/johanzander/bess-manager/issues/450))
+- The schedule table showed SOLAR_STORAGE/GRID_CHARGING/LOAD_SUPPORT labels with the kWh amount hidden as "--" for small-but-real periods (0.01–0.1 kWh) — the frontend's display threshold is now aligned with the backend's classification threshold. ([#484](https://github.com/johanzander/bess-manager/issues/484))
+- **Power monitoring could be enabled without the phase-current sensors it needs, crash-looping the schedule updater while the health check reported "OK"** — enabling it now requires those sensors to be mapped, at the settings UI, setup wizard, and API layers, and the health check flags the gap if it occurs anyway. ([#492](https://github.com/johanzander/bess-manager/issues/492))
 
 ## [10.1.0b3] - 2026-08-05
 
