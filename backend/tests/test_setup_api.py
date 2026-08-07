@@ -15,6 +15,8 @@ from api import router
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from core.bess.ha_api_controller import HomeAssistantAPIController
+
 _test_app = FastAPI()
 _test_app.include_router(router)
 _client = TestClient(_test_app, raise_server_exceptions=False)
@@ -80,7 +82,6 @@ def complete_controller():
     ctrl = MagicMock()
     store_data = deepcopy(_PRE_EXISTING_STORE)
     ctrl.settings_store.data = store_data
-    ctrl.ha_controller.sensors = {}
 
     def _get_section(name: str) -> dict:
         return dict(store_data.get(name, {}))
@@ -98,14 +99,17 @@ def complete_controller():
         result.update(sensors.get(platform, {}))
         return result
 
-    def _refresh_active_sensors() -> None:
-        active = _get_active_sensors()
-        ctrl.ha_controller.sensors = {k: v for k, v in active.items() if v}
-
     ctrl.settings_store.get_section.side_effect = _get_section
     ctrl.settings_store.save_all.side_effect = _save_all
     ctrl.settings_store.get_active_sensors.side_effect = _get_active_sensors
-    ctrl.refresh_active_sensors.side_effect = _refresh_active_sensors
+
+    # Real controller (not a further mock) so ha_controller.sensors is a
+    # live view over store_data, exactly like production (#334) — no
+    # refresh call needed between setup_complete persisting and the
+    # assertion.
+    ctrl.ha_controller = HomeAssistantAPIController(
+        ha_url="http://ha.local", token="tok", settings_store=ctrl.settings_store
+    )
 
     sys.modules["app"].bess_controller = ctrl
     return ctrl
@@ -124,7 +128,18 @@ def _full_wizard_payload(**overrides) -> dict:
             "solax_modbus_growatt_min": {},
             "solax_modbus_growatt_sph": {},
             "solax_modbus_native": {},
-            "shared": {},
+            # phaseCount defaults to 3 and powerMonitoringEnabled defaults to
+            # True below, so the phase-current sensors it requires must be
+            # mapped here too — otherwise the API's server-side validation
+            # (added to close the gap that let power_monitoring_enabled=True
+            # crash-loop without them, 2026-08-07) rejects every payload
+            # built from this base with a 422.
+            "shared": {
+                "current_l1": "sensor.current_l1",
+                "current_l2": "sensor.current_l2",
+                "current_l3": "sensor.current_l3",
+                "battery_charging_power_rate": "sensor.charge_rate",
+            },
         },
         "nordpoolArea": "SE4",
         "nordpoolConfigEntryId": "entry-abc",
@@ -380,6 +395,12 @@ class TestSetupComplete:
             "safetyMarginFactor": 1.0,
             "phaseCount": 3,
             "powerMonitoringEnabled": True,
+            "sensors": {
+                "current_l1": "sensor.current_l1",
+                "current_l2": "sensor.current_l2",
+                "current_l3": "sensor.current_l3",
+                "battery_charging_power_rate": "sensor.charge_rate",
+            },
         }
         resp = _client.post("/api/setup/complete", json=payload)
         assert resp.status_code == 200
@@ -571,6 +592,61 @@ class TestSetupComplete:
             == "sensor.growatt_battery_soc"
         )
 
+    def test_setup_complete_rejects_power_monitoring_without_phase_sensors(
+        self, complete_controller
+    ):
+        """Completing the wizard with power monitoring on but phase-current
+        sensors missing must fail with 422 — the server-side backstop for
+        the same gap that let power_monitoring_enabled=True crash-loop in
+        production (2026-08-07 debug bundle)."""
+        complete_controller.settings_store.data["sensors"] = {
+            "current_l1": "sensor.l1"  # L2/L3 missing
+        }
+        resp = _client.post(
+            "/api/setup/complete",
+            json={"powerMonitoringEnabled": True, "phaseCount": 3},
+        )
+        assert resp.status_code == 422
+
+    def test_setup_complete_accepts_power_monitoring_with_nested_shared_sensors(
+        self, complete_controller
+    ):
+        """A fresh install (empty settings store) submitting a realistic wizard
+        payload with current_l1/l2/l3 correctly mapped under sensors.shared —
+        the actual nested per-platform shape the real wizard always sends,
+        see APISetupCompletePayload.sensors — must succeed. This is the
+        golden path this whole plan exists to fix (Task 3's wizard
+        auto-enables power monitoring exactly like this). The validation must
+        flatten this nested shape via flatten_sensors(), not just check the
+        already-persisted store, otherwise a brand-new install would 422 on
+        its own first-ever setup_complete call."""
+        complete_controller.settings_store.data["sensors"] = {}
+        payload = _full_wizard_payload(
+            sensors={
+                "platform": "growatt_server_min",
+                "growatt_server_min": {
+                    "battery_soc": "sensor.growatt_battery_soc",
+                    "pv_power": "sensor.growatt_pv_power",
+                },
+                "growatt_server_sph": {},
+                "solax_modbus_growatt_min": {},
+                "solax_modbus_growatt_sph": {},
+                "solax_modbus_native": {},
+                "shared": {
+                    "current_l1": "sensor.current_l1",
+                    "current_l2": "sensor.current_l2",
+                    "current_l3": "sensor.current_l3",
+                    "battery_charging_power_rate": "sensor.charge_rate",
+                },
+            },
+            powerMonitoringEnabled=True,
+            phaseCount=3,
+        )
+        resp = _client.post("/api/setup/complete", json=payload)
+        assert resp.status_code == 200
+        call_args = complete_controller.settings_store.save_all.call_args[0][0]
+        assert call_args["home"]["power_monitoring_enabled"] is True
+
     def test_rejects_invalid_sensor_entity_ids(self, complete_controller):
         payload = _full_wizard_payload(
             sensors={
@@ -714,8 +790,8 @@ class TestSetupComplete:
             == "sensor.growatt_battery_soc"
         )
 
-    def test_empty_sensor_values_filtered_from_live_sensors(self, complete_controller):
-        """Empty string sensors should not appear in the live ha_controller map."""
+    def test_empty_sensor_values_treated_as_unconfigured(self, complete_controller):
+        """An empty-string sensor entity resolves as not configured."""
         payload = _full_wizard_payload(
             sensors={
                 "platform": "growatt_server_min",
@@ -728,7 +804,9 @@ class TestSetupComplete:
             }
         )
         _client.post("/api/setup/complete", json=payload)
-        assert "pv_power" not in complete_controller.ha_controller.sensors
+        assert (
+            complete_controller.ha_controller.is_sensor_configured("pv_power") is False
+        )
 
     def test_growatt_device_id_applied_to_ha_controller(self, complete_controller):
         _client.post("/api/setup/complete", json=_full_wizard_payload())

@@ -21,6 +21,8 @@ from api import router
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from core.bess.ha_api_controller import HomeAssistantAPIController
+
 # ---------------------------------------------------------------------------
 # Minimal FastAPI app that exercises the router under test
 # ---------------------------------------------------------------------------
@@ -105,16 +107,16 @@ def mock_controller():
         result.update(sensors.get(platform, {}))
         return result
 
-    def _refresh_active_sensors() -> None:
-        active = _get_active_sensors()
-        ctrl.ha_controller.sensors = {k: v for k, v in active.items() if v}
-
     ctrl.settings_store.get_section.side_effect = _get_section
     ctrl.settings_store.save_section.side_effect = _save_section
     ctrl.settings_store.get_active_sensors.side_effect = _get_active_sensors
-    ctrl.refresh_active_sensors.side_effect = _refresh_active_sensors
 
-    ctrl.ha_controller.sensors = {}
+    # Real controller (not a further mock) so ha_controller.sensors is a
+    # live view over store_data, exactly like production (#334) — no
+    # refresh call needed between a settings PATCH and the assertion.
+    ctrl.ha_controller = HomeAssistantAPIController(
+        ha_url="http://ha.local", token="tok", settings_store=ctrl.settings_store
+    )
 
     sys.modules["app"].bess_controller = ctrl
     return ctrl
@@ -579,7 +581,6 @@ class TestPatchSettingsSensorValidation:
         mock_controller.settings_store.data["sensors"]["growatt_server_min"] = {
             "battery_soc": "sensor.existing"
         }
-        mock_controller.ha_controller.sensors = {"battery_soc": "sensor.existing"}
         _client.patch(
             "/api/settings",
             json={"sensors": {"growatt_server_min": {"battery_soc": ""}}},
@@ -593,10 +594,6 @@ class TestPatchSettingsSensorValidation:
     def test_clear_optional_sensor_removes_from_store(self, mock_controller):
         """Clearing an optional sensor (discharge_inhibit) removes it from storage."""
         mock_controller.settings_store.data["sensors"]["shared"] = {
-            "discharge_inhibit": "input_boolean.bess_discharge_inhibit",
-            "battery_soc": "sensor.battery_soc",
-        }
-        mock_controller.ha_controller.sensors = {
             "discharge_inhibit": "input_boolean.bess_discharge_inhibit",
             "battery_soc": "sensor.battery_soc",
         }
@@ -616,10 +613,6 @@ class TestPatchSettingsSensorValidation:
     def test_clear_phase_current_sensor_removes_from_store(self, mock_controller):
         """Clearing a phase current sensor removes it from both store and memory."""
         mock_controller.settings_store.data["sensors"]["shared"] = {
-            "phase_current_l3": "sensor.phase_l3",
-            "phase_current_l1": "sensor.phase_l1",
-        }
-        mock_controller.ha_controller.sensors = {
             "phase_current_l3": "sensor.phase_l3",
             "phase_current_l1": "sensor.phase_l1",
         }
@@ -656,6 +649,62 @@ class TestPatchSettingsSensorValidation:
         assert (
             mock_controller.ha_controller.sensors["grid_power"] == "sensor.grid_power"
         )
+
+
+# ===========================================================================
+# PATCH /api/settings — power monitoring sensor gating
+# ===========================================================================
+
+
+class TestPatchSettingsPowerMonitoringValidation:
+    """Enabling power monitoring via PATCH must be rejected server-side when
+    the phase-current sensors its phase_count requires aren't mapped — the
+    same gap that let power_monitoring_enabled=True crash-loop in production
+    (2026-08-07 debug bundle) because nothing validated it server-side."""
+
+    def test_rejects_power_monitoring_without_phase_sensors(self, mock_controller):
+        response = _client.patch(
+            "/api/settings",
+            json={"home": {"powerMonitoringEnabled": True, "phaseCount": 3}},
+        )
+        assert response.status_code == 422
+        detail = response.json()["detail"]
+        assert "current_l1" in detail or "phase" in detail.lower()
+        # The invalid combination must never be persisted, even though the
+        # request was rejected — a prior bug wrote power_monitoring_enabled
+        # to disk BEFORE running this validation, so the 422 error message
+        # was returned but the crash-loop-inducing config was still saved.
+        assert not mock_controller.settings_store.data["home"].get(
+            "power_monitoring_enabled"
+        )
+
+    def test_rejects_single_phase_without_l1_sensor(self, mock_controller):
+        response = _client.patch(
+            "/api/settings",
+            json={"home": {"powerMonitoringEnabled": True, "phaseCount": 1}},
+        )
+        assert response.status_code == 422
+
+    def test_allows_power_monitoring_when_phase_sensors_mapped(self, mock_controller):
+        mock_controller.settings_store.data["sensors"]["shared"] = {
+            "current_l1": "sensor.current_l1",
+            "current_l2": "sensor.current_l2",
+            "current_l3": "sensor.current_l3",
+            "battery_charging_power_rate": "sensor.charge_rate",
+        }
+        response = _client.patch(
+            "/api/settings",
+            json={"home": {"powerMonitoringEnabled": True, "phaseCount": 3}},
+        )
+        assert response.status_code == 200
+
+    def test_allows_disabling_power_monitoring_without_sensors(self, mock_controller):
+        """Turning power monitoring off must never be blocked by this check."""
+        response = _client.patch(
+            "/api/settings",
+            json={"home": {"powerMonitoringEnabled": False}},
+        )
+        assert response.status_code == 200
 
 
 # ===========================================================================

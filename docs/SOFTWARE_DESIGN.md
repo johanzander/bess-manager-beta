@@ -318,17 +318,9 @@ kWh floor folds back into `battery_to_home`, but only when
 deficit) — when `battery_to_home == 0`, any nonzero export stays a real
 export, since it has no other channel to have come from.
 
-### Decision Intelligence
-
-Each optimization provides detailed economic reasoning:
-
-- **Immediate Value**: Direct economic impact of each period's decisions
-- **Future Value**: Expected benefits from strategic energy storage
-- **Economic Chain**: Step-by-step profit/loss calculation explanation
-
 ### Battery Action Intent Detection
 
-The system classifies battery action intent using the battery power action as the primary discriminator, with energy flows as secondary input. Classification is performed by `classify_strategic_intent(power, energy_data)` in `decision_intelligence.py`:
+The system classifies battery action intent using the battery power action as the primary discriminator, with energy flows as secondary input. Classification is performed by `classify_strategic_intent(power, energy_data)` in `strategic_intent.py`:
 
 - **Discharging** (power < −0.1 kW):
   - **BATTERY_EXPORT**: `battery_to_grid > 0.1 kWh`
@@ -421,6 +413,10 @@ That domain is configuration, not a platform constant. `SettingsStore.get_servic
 This is what lets an integration that exposes the same services under its own domain name work as a *configuration* of an existing platform instead of requiring a new one — see PR #412 (Huawei EMMA via `huawei_emma_management`, where the EMMA dials out over TLS because a third party owns the Modbus socket). It carries no compatibility guarantee: the payload format is still the platform's (`HH:MM-HH:MM/<days>/<+|->` for Huawei), and an integration claiming the domain must implement those services with the same signatures.
 
 `SolaxModbusGrowattController` subclasses `GrowattMinController` — the scheduling algorithm (9 TOU slots, differential updates, corruption recovery) is identical. Only the hardware I/O differs: `growatt_server` uses a single service call per slot, while `solax_modbus` uses 4 entity writes (`select.select_option`) plus a button press per slot.
+
+#### Signed grid power sensors
+
+A platform-fixed sibling of the service-domain pattern above: some platforms (Solis) expose grid power as one signed sensor instead of separate import/export entities. `SettingsStore.get_grid_power_polarity()` resolves `PLATFORM_GRID_POWER_POLARITY` (`"import_positive"` for `solis_modbus`, `""` elsewhere) — not user-overridable, since polarity is a hardware fact, not configuration. Held on `HomeAssistantAPIController.grid_power_polarity`; `get_import_power()`/`get_export_power()` split the single reading by sign whenever both keys resolve to the same entity_id.
 
 ### Platform Capabilities
 
@@ -665,13 +661,6 @@ Severity Model" for the known fragility here).
 - Economic analysis and savings breakdown
 - Battery status and schedule information
 
-### Decision Intelligence API (`/api/decision-intelligence`)
-
-- Quarterly and hourly decision analysis with economic reasoning
-- Strategic intent explanation and flow patterns
-- Alternative scenario analysis
-- Confidence metrics and prediction accuracy
-
 ### Settings APIs (`/api/settings/battery`, `/api/settings/electricity`)
 
 - Runtime configuration management
@@ -778,7 +767,7 @@ The system operates on **quarterly resolution (15-minute periods)** throughout t
 - **Storage**: Indexes by period_index (0-95)
 - **InfluxDB**: Queries at 15-minute boundaries
 - **API**: Returns quarterly, aggregates only for display
-- **Frontend**: Displays both resolutions as user preference
+- **Frontend**: Displays both resolutions as user preference, except the Dashboard's intent color timeline (`BatteryModeTimeline`), which always renders at quarter-hourly granularity regardless of that preference — hourly aggregation can average away a genuine intent disagreement between quarters (#486)
 
 
 ## Development and Testing

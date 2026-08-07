@@ -17,6 +17,7 @@ import websocket
 
 from .exceptions import SystemConfigurationError
 from .runtime_failure_tracker import RuntimeFailureTracker
+from .settings_store import SettingsStore
 
 logger = logging.getLogger(__name__)
 # logger.setLevel(logging.DEBUG)
@@ -73,22 +74,31 @@ class HomeAssistantAPIController:
         self,
         ha_url: str,
         token: str,
-        sensor_config: dict | None = None,
+        settings_store: SettingsStore | None = None,
         growatt_device_id: str | None = None,
         huawei_device_id: str | None = None,
         service_domain: str | None = None,
+        grid_power_polarity: str | None = None,
     ):
         """Initialize the Controller with Home Assistant API access.
 
         Args:
             ha_url: Base URL of Home Assistant (default: "http://supervisor/core")
             token: Long-lived access token for Home Assistant
-            sensor_config: Sensor configuration mapping from options.json
+            settings_store: Live settings store backing ``.sensors`` — a
+                computed view over ``settings_store.get_active_sensors()``,
+                never a manually-synced snapshot. Defaults to a fresh, empty
+                ``SettingsStore`` for callers that don't need persistence
+                (e.g. tests).
             growatt_device_id: Growatt device ID for TOU segment operations
             huawei_device_id: Huawei battery device ID for TOU period operations
             service_domain: HA integration domain for vendor service calls
                 (SettingsStore.get_service_domain() — "huawei_solar",
                 "growatt_server", or a compatible integration's own domain)
+            grid_power_polarity: Sign convention for a platform whose
+                import_power/export_power share one signed entity
+                (SettingsStore.get_grid_power_polarity() — "import_positive"
+                or "" when the platform has separate entities)
 
         """
         self.base_url = ha_url
@@ -101,8 +111,7 @@ class HomeAssistantAPIController:
         self.retry_base_delay = 2  # seconds (exponential backoff: 2, 4, 8)
         self.test_mode = False
 
-        # Use provided sensor configuration
-        self.sensors = sensor_config or {}
+        self._settings_store = settings_store or SettingsStore()
 
         # Store Growatt device ID for TOU operations
         self.growatt_device_id = growatt_device_id
@@ -116,6 +125,10 @@ class HomeAssistantAPIController:
         # domain is configuration — see SettingsStore.get_service_domain.
         self.service_domain = service_domain or ""
 
+        # Sign convention for a platform whose import_power/export_power
+        # share one signed entity (see get_import_power/get_export_power).
+        self.grid_power_polarity = grid_power_polarity or ""
+
         # Runtime failure tracker (injected by BatterySystemManager)
         self.failure_tracker = None
 
@@ -127,6 +140,20 @@ class HomeAssistantAPIController:
             "Initialized HomeAssistantAPIController with %d sensor mappings",
             len(self.sensors),
         )
+
+    @property
+    def sensors(self) -> dict:
+        """Active sensor_key -> entity_id map, read live from settings_store.
+
+        Computed on every access — never cached — so a settings mutation
+        (direct sensor edit, inverter platform switch, ...) is visible here
+        immediately, with no refresh call required.
+        """
+        return self._settings_store.get_active_sensors()
+
+    @sensors.setter
+    def sensors(self, value: dict) -> None:
+        self._settings_store.data["sensors"] = dict(value)
 
     # Class-level sensor mapping - immutable mapping
     METHOD_SENSOR_MAP: ClassVar[dict[str, dict[str, object]]] = {
@@ -838,6 +865,15 @@ class HomeAssistantAPIController:
     # (inverter), storage_total_charge/storage_total_discharge (battery),
     # grid_exported_energy/grid_accumulated_energy (separate power-meter device,
     # so these two resolve to "not configured" on meterless installs).
+    # input_power (inverter, real-time PV) and power_meter_active_power
+    # (separate power-meter device, real-time grid power) verified against
+    # the same source (issue #438). power_meter_active_power is a single
+    # signed register (positive = export, negative = import — confirmed
+    # against Huawei's official register description, not the integration
+    # source, which documents no sign convention); it maps to import_power
+    # here and discover_sensors_from_registry also points export_power at
+    # the same entity, same pattern as Solis's grid_power_net (#475) — see
+    # PLATFORM_GRID_POWER_POLARITY["huawei_solar_luna2000"] in settings_store.py.
     HUAWEI_SUFFIX_MAP: ClassVar[dict[str, str]] = {
         "storage_state_of_capacity": "battery_soc",
         "storage_charge_discharge_power": "battery_charge_power",
@@ -853,6 +889,8 @@ class HomeAssistantAPIController:
         "storage_total_discharge": "lifetime_battery_discharged",
         "grid_exported_energy": "lifetime_export_to_grid",
         "grid_accumulated_energy": "lifetime_import_from_grid",
+        "input_power": "pv_power",
+        "power_meter_active_power": "import_power",
     }
 
     def resolve_sensor_for_influxdb(self, sensor_key: str) -> str | None:
@@ -2403,12 +2441,42 @@ class HomeAssistantAPIController:
         """Get current solar PV power production in watts."""
         return self._get_sensor_value("pv_power")
 
+    def _is_shared_signed_grid_power(self) -> bool:
+        """True when import_power/export_power resolve to one signed entity.
+
+        Some platforms (Solis) expose grid power as a single signed sensor
+        instead of separate import/export entities. get_import_power/
+        get_export_power detect this case and split the one raw reading by
+        sign instead of reading the entity twice unmodified.
+        """
+        import_entity = self.sensors.get("import_power")
+        export_entity = self.sensors.get("export_power")
+        return bool(
+            self.grid_power_polarity
+            and import_entity
+            and import_entity == export_entity
+        )
+
     def get_import_power(self):
         """Get current grid import power in watts."""
+        if self._is_shared_signed_grid_power():
+            raw = self._get_sensor_value("import_power")
+            if raw is None:
+                return None
+            if self.grid_power_polarity == "import_positive":
+                return max(0.0, raw)
+            return max(0.0, -raw)  # export_positive
         return self._get_sensor_value("import_power")
 
     def get_export_power(self):
         """Get current grid export power in watts."""
+        if self._is_shared_signed_grid_power():
+            raw = self._get_sensor_value("import_power")
+            if raw is None:
+                return None
+            if self.grid_power_polarity == "import_positive":
+                return max(0.0, -raw)
+            return max(0.0, raw)  # export_positive
         return self._get_sensor_value("export_power")
 
     def get_local_load_power(self):
@@ -3550,6 +3618,12 @@ class HomeAssistantAPIController:
                     if k not in solis_sensors
                 }
             )
+            # Solis has no separate export_power entity — grid_power_net is
+            # a single signed sensor (see SOLIS_SUFFIX_MAP comment). Point
+            # export_power at the same entity so HAApiController's signed
+            # split (grid_power_polarity) can derive both readings from it.
+            if "import_power" in solis_sensors and "export_power" not in solis_sensors:
+                solis_sensors["export_power"] = solis_sensors["import_power"]
             # Monitoring sensors are always mapped, but only auto-select
             # solis_modbus as the detected platform when the Grid TOU v2
             # marker is present — without it, schedule writes fail on every
@@ -3567,6 +3641,24 @@ class HomeAssistantAPIController:
                     "inverter/firmware; monitoring sensors mapped but "
                     "solis_modbus is not auto-selected as detected_platform"
                 )
+
+        if inverter_detected.get("huawei"):
+            huawei_sensors = self._map_registry_entities(
+                entities, ["huawei_solar"], self.HUAWEI_SUFFIX_MAP
+            )
+            # power_meter_active_power is a single signed register — Huawei
+            # has no separate export_power entity (same situation as Solis's
+            # grid_power_net, #475). Point export_power at the same entity
+            # so HAApiController's signed split (grid_power_polarity) can
+            # derive both readings from it.
+            if (
+                "import_power" in huawei_sensors
+                and "export_power" not in huawei_sensors
+            ):
+                huawei_sensors["export_power"] = huawei_sensors["import_power"]
+            platform_sensors["huawei_solar_luna2000"] = huawei_sensors
+            if not detected_platform:
+                detected_platform = "huawei_solar_luna2000"
 
         return platform_sensors, detected_platform
 
