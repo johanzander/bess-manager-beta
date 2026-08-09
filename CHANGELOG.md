@@ -4,6 +4,14 @@ All notable changes to BESS Battery Manager will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [10.1.0b6] - 2026-08-10
+
+Delta from `v10.1.0b5`.
+
+### Fixed
+
+- Minor internal cleanup in the debug export.
+
 ## [10.1.0b5] - 2026-08-07
 
 Delta from `v10.1.0b4`.
