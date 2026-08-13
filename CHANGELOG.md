@@ -4,6 +4,11 @@ All notable changes to BESS Battery Manager will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [10.1.0b8] - 2026-08-13
+
+Delta from `v10.1.0b7`. Everything else accumulated in `Unreleased` on main
+already shipped in `v10.1.0b7` or earlier; this release covers only what is
+genuinely new since then.
 ## [10.1.0b7] - 2026-08-13
 
 Delta from `v10.1.0b6`. Everything else accumulated in `Unreleased` on main
@@ -20,10 +25,15 @@ covers only what's genuinely new since `v10.1.0b6`.
 
 ### Changed
 
-- **Finer battery optimization grid** — the DP's state/action resolution is halved (0.1 kW / 0.025 kWh), recovering 2.43 SEK/day of savings across the benchmark corpus while reducing solve time. ([#512](https://github.com/johanzander/bess-manager/issues/512))
+- **Huawei LUNA2000 no longer rewrites TOU periods the battery already holds** — BESS reads the programmed periods back and skips the write when they match, sparing needless flash wear. ([#431](https://github.com/johanzander/bess-manager/issues/431))
+- **Debug bundles are several times smaller** — prediction snapshots now record only the periods whose plan changed, in a compact encoding, instead of rewriting the whole forecast each run. ([#555](https://github.com/johanzander/bess-manager/issues/555))
 
 ### Fixed
 
+- **Reported lifetime house consumption is now correct on SolaX, Solis and Huawei**, which have no load register — it previously overstated load by the battery's lifetime net charge. ([#528](https://github.com/johanzander/bess-manager/issues/528))
+- **A missing consumption sensor no longer leaves the dashboard stuck on "Initializing"** — with the `sensor` strategy selected and no `48h_avg_grid_import` entity, the health check now reports a critical error, that strategy can't be selected without its sensor, and new installs default to `fixed`. ([#558](https://github.com/johanzander/bess-manager/issues/558))
+- **The setup wizard no longer completes with a configuration that cannot work** — it now blocks on inverter sensors whose Home Assistant entity is disabled (naming them so you can enable them) and on a price provider that isn't configured, instead of reporting "SYSTEM DEGRADED" afterwards. ([#549](https://github.com/johanzander/bess-manager/issues/549))
+- **Native SolaX and Huawei installs now auto-configure battery discharge power**, derived from the same signed sensor as charge power, instead of needing hand-built template sensors. ([#542](https://github.com/johanzander/bess-manager/issues/542))
 - **Growatt MIN TOU segments are now written against the inverter's real state**, ending repeated "500 Server Error" write failures and leaving no unplanned segments running on the battery. ([#551](https://github.com/johanzander/bess-manager/issues/551))
 - **House load spikes during a battery-supported period are now covered from the battery instead of the grid**, on TOU/register platforms, whenever the stored energy is worth less than importing at that moment (`buy_price × discharge_efficiency ≥ shadow_price`, decided by the optimizer). When the battery is genuinely being reserved for a pricier later period the reserve is still protected and the spike is imported. ([#520](https://github.com/johanzander/bess-manager/issues/520))
 - **Sub-period battery discharge is no longer permitted on an uncomputed value** — the ceiling opened whenever the battery sat at its reserve floor, where no marginal value exists. ([#526](https://github.com/johanzander/bess-manager/issues/526))
