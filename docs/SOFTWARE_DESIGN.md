@@ -78,7 +78,7 @@ def start() -> None
 
 **Algorithm Flow**:
 
-1. **Discretization**: Battery state of energy (SOE) and power levels are discretized into fine-grained steps (0.1 kWh / 0.2 kW)
+1. **Discretization**: Battery state of energy (SOE) and power levels are discretized into fine-grained steps (0.025 kWh / 0.1 kW -- halved in #512 after a full-corpus benchmark showed the coarser 0.05 kWh / 0.2 kW grid left 0.01-0.36 SEK/day unrealized on most fixtures)
 2. **Backward Induction**: Starting from the last period, work backwards evaluating all feasible actions (charge/discharge/idle) at each (period, SOE) cell
 3. **Reward + Future Value**: For each action, compute the immediate reward (grid cost savings minus cycle cost) plus the optimal future value from the resulting SOE state
 4. **Policy Extraction**: Forward-simulate from the initial SOE, following the optimal action at each step to produce the final schedule
@@ -364,6 +364,7 @@ for the full VPP-mode design (issue #355).
 2. Only create TOU segments for strategic modes (battery_first, grid_first) — load_first is the inverter default and needs no segment
 3. Enforce hardware constraints: max 9 TOU segments, chronological order, no overlaps
 4. Preserve past intervals to minimize unnecessary inverter writes
+5. Diff against segments read fresh from the inverter on every write cycle, never against an in-memory model — a model seeded once at startup drifts from hardware, producing writes that duplicate live segments (rejected by the vendor API) and leaving dropped segments enabled on the battery ([#551](https://github.com/johanzander/bess-manager/issues/551))
 
 ## Configuration and Settings
 
@@ -644,12 +645,22 @@ specific sensors within the component must succeed for it to be ERROR
 rather than WARNING). `determine_health_status()`
 (`core/bess/health_check.py:80-127`) combines them into three outcomes: ERROR
 only when a *required* sensor is missing/failing, WARNING when only an
-*optional* sensor fails, and SKIPPED for sensors intentionally left
-unconfigured (these don't count as a failure at all). A component with
-`is_required=False` should never surface as ERROR — if it does, check
-whether `required_methods` was mistakenly passed as "all methods" instead
-of derived from `is_required` (see `TODO.md`'s "Simplify Health Check
-Severity Model" for the known fragility here).
+*optional* sensor fails, and SKIPPED for optional sensors intentionally left
+unconfigured — those don't count as a failure at all. `perform_health_check()`
+(`core/bess/health_check.py:138-`) never reports SKIPPED for a *required*
+sensor: when a required method's primary sensor mapping is `not_configured`,
+it still attempts to *call* the method, because some methods (e.g.
+`get_load_consumption_lifetime`) derive a value from other sensors when the
+direct one isn't mapped — the pre-check only validates the direct mapping,
+not whether a fallback path exists. That call resolves to OK (fallback
+succeeded), WARNING (returned `None`), or ERROR (raised); a required sensor
+with no working fallback still correctly drives the component to ERROR, it
+just does so via one of those three statuses rather than SKIPPED. A
+component with `is_required=False` should never surface as ERROR — if it
+does, check whether `required_methods` was mistakenly passed as "all
+methods" instead of derived from `is_required`
+(see `TODO.md`'s "Simplify Health Check Severity Model" for the known
+fragility here).
 
 ## API Architecture
 

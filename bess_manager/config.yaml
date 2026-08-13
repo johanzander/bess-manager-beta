@@ -1,6 +1,6 @@
 name: "BESS Manager (Beta)"
 description: "Battery Energy Storage System optimization and management"
-version: "10.1.0b6"
+version: "10.1.0b7"
 slug: "bess_manager_beta"
 image: "ghcr.io/johanzander/bess-manager-beta-{arch}"
 init: false

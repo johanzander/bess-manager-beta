@@ -4,6 +4,38 @@ All notable changes to BESS Battery Manager will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [10.1.0b7] - 2026-08-13
+
+Delta from `v10.1.0b6`. Everything else accumulated in `Unreleased` on main
+(PV export-limit curtailment, configurable inverter service domain, grid
+connection import capacity modeling, the "Min Action Profit" removal, the
+Huawei/Solis discovery fixes, the #450 PWL re-solve, and the Growatt VPP
+control-mode fixes) already shipped in `v10.1.0b6` or earlier. This release
+covers only what's genuinely new since `v10.1.0b6`.
+
+### Added
+
+- **Solis inverter platform (`solis_modbus`) is now stable** — confirmed working against real Solis installations by two beta testers, no longer marked experimental. ([#130](https://github.com/johanzander/bess-manager/issues/130))
+- **ENTSO-e / Belpex price provider is now stable** — confirmed working against a real Belgian Belpex/Luminus Dynamic contract over an extended live-test period, no longer marked experimental. ([#126](https://github.com/johanzander/bess-manager/issues/126))
+
+### Changed
+
+- **Finer battery optimization grid** — the DP's state/action resolution is halved (0.1 kW / 0.025 kWh), recovering 2.43 SEK/day of savings across the benchmark corpus while reducing solve time. ([#512](https://github.com/johanzander/bess-manager/issues/512))
+
+### Fixed
+
+- **Growatt MIN TOU segments are now written against the inverter's real state**, ending repeated "500 Server Error" write failures and leaving no unplanned segments running on the battery. ([#551](https://github.com/johanzander/bess-manager/issues/551))
+- **House load spikes during a battery-supported period are now covered from the battery instead of the grid**, on TOU/register platforms, whenever the stored energy is worth less than importing at that moment (`buy_price × discharge_efficiency ≥ shadow_price`, decided by the optimizer). When the battery is genuinely being reserved for a pricier later period the reserve is still protected and the spike is imported. ([#520](https://github.com/johanzander/bess-manager/issues/520))
+- **Sub-period battery discharge is no longer permitted on an uncomputed value** — the ceiling opened whenever the battery sat at its reserve floor, where no marginal value exists. ([#526](https://github.com/johanzander/bess-manager/issues/526))
+- Near-tied battery decisions now prefer the fullest load-covering discharge even when the tie surfaces at a partial cover, closing a gap where residual import stayed exposed to consumption spikes. ([#512](https://github.com/johanzander/bess-manager/issues/512))
+- Sunrise and sunset periods where solar nearly covers the house no longer sit IDLE and import the small remainder from the grid — the battery now serves it. ([#466](https://github.com/johanzander/bess-manager/issues/466))
+- **Predicted savings no longer include export revenue the inverter cannot earn** — the optimizer stopped planning discharges the hardware would silently throttle, so predicted and actual results now agree. ([#497](https://github.com/johanzander/bess-manager/issues/497))
+- **With PV export-limit curtailment enabled, the battery now fills from below-floor surplus solar instead of deferring the charge** — the sell-price floor makes every below-floor export worth exactly 0 to the optimizer, so charge-now and curtail-now tied on float noise and the deferred pick clipped PV to house load while multi-kWh of battery headroom sat unused. ([#510](https://github.com/johanzander/bess-manager/issues/510))
+- **Planned PV curtailment is now shown as "Curtailed"** across the dashboard's schedule, timeline, and status views, instead of looking like a profitable Solar Export. ([#501](https://github.com/johanzander/bess-manager/issues/501))
+- **Reported cost and savings no longer include a phantom charge for periods that will actually be curtailed at runtime by PV export-limit curtailment.** ([#502](https://github.com/johanzander/bess-manager/issues/502))
+- **"-0.00" no longer displays for values that round to zero** — e.g. a curtailed period's export revenue now shows as "0.00".
+- Health checks for Battery Control, Battery Monitoring, and Energy Monitoring now report ERROR instead of OK when a required sensor is entirely unmapped, not just when it's unavailable. ([#503](https://github.com/johanzander/bess-manager/issues/503))
+
 ## [10.1.0b6] - 2026-08-10
 
 Delta from `v10.1.0b5`.
@@ -78,6 +110,12 @@ Delta from `v10.0.1`, the last official stable release.
 - **A silently dropped quarterly schedule-update tick permanently lost a period's actuals with no trace it ever happened** — the missed tick is now logged and surfaced as a runtime failure. ([#403](https://github.com/johanzander/bess-manager/issues/403))
 - The "Enable Live Control" pre-flight dialog showed a green check for optional components that were genuinely failing (e.g. a misconfigured InfluxDB), not just ones left unconfigured. Those now show an amber warning — they still never block enabling live control.
 - Settings → Savings History silently displayed "0 days recorded" when the disk-usage request failed, and swallowed errors when clearing the history. Both now surface the actual error.
+
+## [10.0.2] - 2026-08-10
+
+### Fixed
+
+- Minor internal cleanup in the debug export.
 
 ## [10.0.1] - 2026-08-02
 

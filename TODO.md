@@ -202,18 +202,6 @@
 
 ---
 
-### Health check silently skips genuinely-required-but-unmapped sensors
-
-**Impact**: Medium | **Effort**: Medium | **Dependencies**: `core/bess/health_check.py`
-
-**Description**: `perform_health_check()`'s `not_configured` branch (`health_check.py:183-193`) always converts an unmapped sensor to `"SKIPPED"` and `determine_health_status()` (`health_check.py:99-102`) excludes SKIPPED checks from both `required_total` and `required_working` — regardless of whether the caller passed `is_required=True`. This means components that call `perform_health_check(is_required=True, ...)` with a sensor that is *entirely unmapped* (not just unavailable) currently report OK/pass instead of ERROR, the same underlying shortcoming just fixed for Power Monitoring (see `docs/superpowers/plans/2026-08-07-power-monitoring-sensor-gating.md`). Affected call sites: `growatt_min_controller.py:1387` (Battery Control), `solax_modbus_growatt_controller.py:757` (Battery Control), `sensor_collector.py:813,827` (Battery Monitoring, Energy Monitoring) — all pass `is_required=True` for sensors assumed always-present via platform suffix maps, but if a user manually deletes/unmaps one, the health check would not catch it.
-
-**Fix direction**: Make `not_configured` → `SKIPPED` conditional on `method_name not in required_methods`; when it *is* required, report `ERROR` instead. Needs care: verify none of the four call sites above have individually-optional sensors within their `all_methods` list that would wrongly start erroring.
-
-**Files**: `core/bess/health_check.py` (`perform_health_check`, `determine_health_status`)
-
----
-
 ### **Improve InfluxDB Health Check to Verify Sensor Coverage**
 
 **Impact**: Medium | **Effort**: Low-Medium | **Dependencies**: `health_check.py`, `influxdb_helper.py`
@@ -614,9 +602,9 @@ The real fix is to move construction into the FastAPI `lifespan` startup hook, w
 
 **PR #461's MILP has a residual self-throttle export-credit bug beyond the one already fixed in that branch's `0df1d8bc`.** In that model `throttled[t]=1` means "not self-throttled, full credit allowed" and `throttled[t]=0` forces `credited_exp=0` (verified against the constraint block in `0df1d8bc`, not just its commit message). The commit added `throttled=1 ⟹ credited_exp == exp` (a genuine lower bound in the full-credit branch) and `throttled=0 ⟹ exp <= threshold` (restricting the zero-credit branch to genuinely small exports), but never added the **converse of the second**: nothing forces `throttled=0` when `exp <= threshold`. So `throttled` stays a free binary whenever `exp` is small — the solver can always choose `throttled=1` and claim full revenue credit for exports that should have been zero-credited. Measured on `regression_2026_08_02_043728.json`: 11 DISCHARGE periods export ≤ 0.01 kWh and are fully credited, worth exactly 0.031857 SEK — which is precisely the gap between the MILP's *reported* `battery_solar_cost` (-6.012542) and the MILP's *own* true DP-reward objective value for the same schedule (-5.980684), i.e. `-6.012542 = -5.980684 - 0.031857`. On the real objective the MILP's schedule (-5.980684) is in fact *worse* than the full-horizon exact PWL's (-5.984652); the headline -6.012542 is an artifact of the over-credit, not a better plan. This is separate from and additional to the four MILP bugs already documented in PR #461's own description (import/export exclusivity, AC-cap sentinel, the credited-exp lower-bound fix in `0df1d8bc`, and the shadow-price LP-dual non-uniqueness). Confirmed structurally impossible in the grid-DP/PWL approach, since self-throttle there is a deterministic formula (`if exp <= threshold: exp = 0`) with no LP slack variable to exploit — this bug class is intrinsic to the MILP's constraint-encoding paradigm, not something a future MILP fix could accidentally miss again in the same code path (it needs the converse constraint added).
 
-**`_build_period_data`'s reported `battery_solar_cost` metric drifts from the actual DP-reward optimization objective**, because it prices raw `_ac_flows` `grid_exported` without zeroing self-throttled export revenue, while `_compute_reward` (which drives the actual optimization decision) does zero it. `dp_battery_algorithm.py:1985`'s comment acknowledges the discrepancy exists but only accounts for it in the curtailment guardrail, not in the general reporting path. The drift is schedule-dependent (measured -0.0137 SEK for one PWL schedule, -0.0257 for the grid DP, -0.0319 for the MILP on the same fixture) — meaning the *reported* cost systematically favors whichever schedule happens to have more never-delivered (self-throttled) export, independent of the schedule's real economic quality. Any fixture pinning or cross-algorithm cost comparison should use the DP's real reward objective, not `battery_solar_cost`, until this is fixed.
+**~~`_build_period_data`'s reported `battery_solar_cost` metric drifts from the actual DP-reward optimization objective~~ — FIXED by #497.** The drift existed because `_build_period_data` priced raw `_ac_flows` `grid_exported` without zeroing self-throttled export revenue, while `_compute_reward` did zero it (measured -0.0137 to -0.0319 SEK depending on schedule, so the *reported* cost systematically favoured whichever schedule had more never-delivered export). #497 removed the self-throttle correction entirely — the DP no longer proposes a discharge that would produce a sub-resolution export, so there is no never-delivered export for the two paths to disagree about. Verified: `reward_objective_cost == economic_summary.battery_solar_cost` exactly on all 33 fixtures. Fixture pinning can now use either metric; `test_issue_450_hybrid_resolution` asserts the two agree.
 
-**Files**: `core/bess/milp_battery_algorithm.py` (PR #461 branch only — the converse self-throttle constraint), `core/bess/dp_battery_algorithm.py:1985` (`_build_period_data`'s reporting-vs-objective drift, this branch and main)
+**Files**: `core/bess/milp_battery_algorithm.py` (PR #461 branch only — the converse self-throttle constraint). The `_build_period_data` reporting-vs-objective drift is fixed; the MILP note above is also moot in practice, since the self-throttle mechanism it describes no longer exists in the DP.
 
 ---
 
@@ -675,3 +663,94 @@ further.
 **`core/bess/settings_store.py` has duplicate top-level `VALID_PLATFORMS` and `SHARED_SENSOR_KEYS` definitions.** Both constants are defined twice — once around lines 36-58, again around lines 67-89 — byte-identical in each pair. The second definition silently shadows the first; nothing currently breaks because they're kept in sync by coincidence, but the duplication is dead code and a drift risk if one copy is ever edited without the other. Pre-existing on `main`, unrelated to and not introduced by `docs/superpowers/plans/2026-08-07-power-monitoring-sensor-gating.md`. Fix: delete one copy of each.
 
 ---
+
+## From the #497 flow-invariant suite (non-blocking)
+
+**`test_scenarios.py::test_all_scenarios` and `test_plan_faithfulness.py::test_realized_matches_planned_across_all_fixtures` use two different definitions of "realized" (R).** The inline block at the end of `test_all_scenarios` builds commands via `derive_control_command(...)` without passing the gate authorization; `helpers.run_scenario_realized` — which the new corpus-wide gap pin uses — passes it. (As of #526 that argument is `intra_period_discharge_allowed`, taken from `pd.decision`; it was previously the `shadow_price`/`buy_price` pair.) So the two corpus-wide R-vs-P checks are not measuring the same R. Nothing is wrong today, but whoever fixes #497 and re-pins `PLAN_EXECUTION_GAP_SEK` will be re-pinning against one definition while the looser per-scenario check enforces the other. Fix: replace the inline block in `test_all_scenarios` with a `run_scenario_realized` call. Left out of the invariant-suite PR because it changes what an existing test asserts, which deserves its own diff rather than riding along with test-infrastructure additions.
+
+---
+
+## The bigger question: why does the DP need a dozen epsilons at all?
+
+Raised while diagnosing #497. Worth its own investigation, not a drive-by fix.
+
+The DP currently carries something like a dozen independently-chosen small
+constants, each added to patch one symptom:
+
+| Constant | Where | Purpose |
+|---|---|---|
+| ~~`self_throttle_export_threshold_kwh`~~ | *deleted by #497* | self-throttle export credit (#240) |
+| `GRID_FLOW_RESOLUTION_KWH` (0.1) | `models.py` | one constant for counter resolution, shared by `models.py`'s fold and the DP's executability rule (#497) |
+| ~~`BATTERY_EXPORT_THRESHOLD_KWH`~~ | *deleted by #497 review follow-up* | was intent classification boundary; the #466 tie-break round-up band that used it is dead under the exclusion |
+| `0.01` battery_to_grid / grid_to_battery | `strategic_intent.py` | intent classification |
+| `_POWER_THRESHOLD_KW` (0.1) | `strategic_intent.py` | intent noise filter |
+| `POWER_TOLERANCE_KW` | `dp_battery_algorithm.py` | charge/discharge/idle branch selection |
+| `POWER_CLASSIFICATION_THRESHOLD_KW` | `dp_battery_algorithm.py` | minimum discharge candidate |
+| `SOE_STEP_KWH` (0.1) | `dp_constants.py` | DP state grid resolution |
+| `rate_step` = max_discharge/100 | `dp_battery_algorithm.py` | hardware percent resolution |
+| `epsilon` (tie detection) | `tie_detection.py` | value-function noise band |
+| ~~`max_cover_p` half-step band~~ | *deleted by #497 review follow-up* | was #466 load-cover tie-break round-up; exact/under-cover only now |
+| `validate_energy_balance` tolerance (0.2) | `models.py` | cross-sensor balance warning |
+| `GRID_RESOLUTION_TOLERANCE` (0.10 SEK) | `test_plan_faithfulness.py` | plan-faithfulness slack |
+
+**Partly answered by #497**, which is worth reading as a worked example before
+attempting the rest. Framing 2 below turned out to be the productive one: the
+self-throttle threshold existed only because the DP modelled *commanded*
+rather than *executable* energy. Removing that premise deleted the constant,
+its platform property, its whole parameter chain, and — as consequences, not
+as separate fixes — the plan-vs-execution gap and the objective-vs-report
+drift. Two constants collapsed into one shared `GRID_FLOW_RESOLUTION_KWH`.
+The remaining rows above are still worth the same treatment.
+
+Each is defensible in isolation. The failure mode is that they interact: any
+two of them that describe *the same physical boundary* in different units, or
+at different stages of the pipeline, can silently drift apart. #240 vs #350 is
+one instance (#497); the design doc referenced at `strategic_intent.py:44`
+records an earlier one. Both were found by a human reading a schedule by hand,
+years apart, and both needed DP expertise to adjudicate — which does not scale
+and is not something the maintainer can review.
+
+The question is not "are these values right" but "why are there so many
+independent ones". Candidate framings, none investigated:
+
+1. **How many of these are really the same boundary expressed twice?** The
+   self-throttle threshold, the fold floor and the intent classifier's
+   `battery_to_grid` cut all try to answer one question: "is this export real?"
+   Three constants, three call sites, three chances to disagree. If that is one
+   concept, it should be one named thing with one owner.
+2. **How many exist only because the DP models *commanded* energy rather than
+   *executed* energy?** #497's fix removes one by making the plan describe what
+   the hardware will actually do. `max_cover_p` (#466) may be the same shape.
+   The inverter simulator already encodes the true execution semantics; the DP
+   approximating them with epsilons is arguably the root pattern.
+3. **How many are discretization artifacts that a continuous formulation would
+   not need?** `SOE_STEP_KWH`, `rate_step`, the tie-detection `epsilon` and the
+   half-step cover band all exist because the DP searches a grid. `pwl_window_dp`
+   already explores a piecewise-linear alternative.
+
+Concrete first step, cheap and non-destructive: enumerate every small constant
+in `core/bess/`, and for each record the physical question it answers. Any
+physical question answered by more than one constant is a latent #497. That
+inventory is a day's work and would tell us whether this is a real structural
+problem or a dozen unrelated coincidences — worth knowing before anyone
+proposes a redesign.
+
+---
+
+## From #502 (curtailed periods overcharged in reported cost) fix
+
+**`core/bess/simulation/inverter_simulator.py` has no concept of PV export-limit curtailment (#269).** `run_scenario_realized`'s `simulate()` only replays the DP's own charge/discharge commands via `derive_control_command` — it has no model of BSM's separate `apply_export_limit` hardware write, which is a second, independent control path issued alongside the DP-derived commands, not derived from them. #502 made the *reported* plan (`economic_summary.battery_solar_cost`) correctly exclude a curtailed period's cost, since BSM really will curtail it to zero at runtime — but the simulator's realized cost (R) still pays the full honest negative-price export for that period, since it has no way to know curtailment will fire. This opened a genuine, structural R-vs-P gap for any fixture with an actual curtailed period: `regression_2026_08_08_143843`'s pin moved from +0.0490 to +0.0693 SEK (re-pinned in #507; every other fixture in the corpus was unaffected — it's the only one with a real curtailed period). The gap is not the reported plan being newly dishonest — it is the simulator lacking fidelity for a feature it never modeled. Fix: teach `simulate()` to also apply export-limit curtailment (zero the solar-sourced export share, mirroring `apply_export_curtailment_to_period_data`'s logic) for periods where `export_curtailment_active` and the period's sell price is below the floor, closing the gap back toward zero. Left out of #507 since it's a simulator feature addition, not a reporting bug fix — the PR that fixes #502's reporting bug is not the place to also extend simulator fidelity.
+
+---
+
+## From #466 residual-cover review (out-of-scope CONFIRMED findings, main-branch code)
+
+Code review of the #466 residual-cover branch surfaced these in code the branch
+does not touch (curtailment/display work from #501/#502/#507/#508). Verified by
+the reviewer with executed repros where noted; none are addressed in that PR.
+
+1. **`decision.curtailed` predicate wider than the adjuster's** (`dp_battery_algorithm.py` ~791, executed repro): `should_curtail_export` checks total `grid_exported > 0` while `apply_export_curtailment_to_period_data` gates on `solar_to_grid > 0`, so a battery-sourced sub-floor export renders "Curtailed (No Export)" while actually exporting at negative revenue. Worse, `reward_sell_price` floors to 0 for ALL export in sub-floor periods, letting the DP plan battery exports at negative prices as if PV throttling neutralized them. Gate both the flag and the reward floor on the solar-sourced share.
+2. **`daily_view_builder.py:96` `export_curtailment_active: bool = False` default** is a silent fallback used by zero production callers; a future caller omitting it silently reproduces #502's phantom-cost bug. Make it required; add the arg at the 14 test sites.
+3. **`models.py:527` hand-lists all 9 `EnergyData` init fields** instead of `dataclasses.replace(energy, grid_exported=..., clipped_solar=...)`; any future init field silently reverts to default in the curtailment-adjusted copy.
+4. **`SystemStatusCard.tsx:293` "Curtailed (No Export)" label** is wrong at hourly display resolution where `curtailed = any(quarter)` can cover an hour that mostly exports; soften the copy or derive from the current quarter.
+5. **`backend/api.py:1326` (PLAUSIBLE, latent)**: tomorrow-schedule pd-is-None branch appends to `soc_values`/`curtailed` but not `intents`/`actions`; a future mid-anchored schedule would shift SOC/curtailed onto wrong rows. Cheap hardening: append symmetrically.

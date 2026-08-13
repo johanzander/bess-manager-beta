@@ -1633,40 +1633,41 @@ class HomeAssistantAPIController:
         )
 
     def read_inverter_time_segments(self):
-        """Read all time segments from the inverter with retry logic."""
-        try:
-            # Prepare service call parameters
-            service_params: dict[str, str | bool] = {"return_response": True}
+        """Read all time segments from the inverter with retry logic.
 
-            # Require device_id before attempting the API call
-            if not self.growatt_device_id:
-                raise SystemConfigurationError(
-                    "Growatt device_id not configured. Run the setup wizard to configure the inverter."
-                )
+        Raises on a failed or unrecognizable read. An empty list is a valid
+        answer meaning "no segments programmed" and must stay distinguishable
+        from failure: callers diff against this to decide what to write, and
+        a failure silently reported as [] would make them rewrite every
+        segment blind (issue #551).
+        """
+        service_params: dict[str, str | bool] = {"return_response": True}
 
-            service_params["device_id"] = self.growatt_device_id
-
-            # Call the service and get the response
-            result = self._service_call_with_retry(
-                self._vendor_service_domain(),
-                "read_time_segments",
-                operation=None,
-                **service_params,
+        # Require device_id before attempting the API call
+        if not self.growatt_device_id:
+            raise SystemConfigurationError(
+                "Growatt device_id not configured. Run the setup wizard to configure the inverter."
             )
 
-            # Check if the result contains 'service_response' with 'time_segments'
-            if result and "service_response" in result:
-                service_response = result["service_response"]
-                if "time_segments" in service_response:
-                    return service_response["time_segments"]
+        service_params["device_id"] = self.growatt_device_id
 
-            # If the result doesn't match expected format, log and return empty list
-            logger.warning("Unexpected response format from read_time_segments")
-            return []
+        # Transport errors propagate: _service_call_with_retry has already
+        # exhausted its retries by the time it raises.
+        result = self._service_call_with_retry(
+            self._vendor_service_domain(),
+            "read_time_segments",
+            operation=None,
+            **service_params,
+        )
 
-        except (requests.RequestException, ValueError, KeyError) as e:
-            logger.warning("Failed to read time segments: %s", str(e))
-            return []
+        if result and "service_response" in result:
+            service_response = result["service_response"]
+            if "time_segments" in service_response:
+                return service_response["time_segments"]
+
+        raise ValueError(
+            f"Unexpected response format from read_time_segments: {result!r}"
+        )
 
     # ── solax_modbus entity-based TOU segment control (Growatt plugin) ────
 
@@ -2272,6 +2273,17 @@ class HomeAssistantAPIController:
     def get_growatt_vpp_remote_control(self) -> str | None:
         """Read the current Growatt VPP Remote Control register state."""
         return self._get_raw_state("growatt_vpp_remote_control")
+
+    def get_growatt_vpp_allow_ac_charging(self) -> str | None:
+        """Read the current Growatt VPP allow-AC-charging register state.
+
+        Both flash registers the VPP path writes at startup need a read-back,
+        not just VPP Status: they are written together but can drift apart (a
+        user toggle, a firmware reset, or a write that failed after the first
+        of the two), and an install with Status Enabled but AC charging
+        Disabled cannot execute GRID_CHARGING at all.
+        """
+        return self._get_raw_state("growatt_vpp_allow_ac_charging")
 
     # ─────────────────────────────────────────────────────────────────────────
 

@@ -530,7 +530,14 @@ class DebugDataAggregator:
             Battery settings as dictionary
         """
         try:
-            return asdict(self.system.battery_settings)
+            settings = asdict(self.system.battery_settings)
+            # Resolved capability-aware flag (enabled AND the platform
+            # supports export-limit control) -- not a stored setting, so
+            # from_debug_log.py can't reconstruct it from the settings alone.
+            settings["export_curtailment_active"] = (
+                self.system.export_curtailment_active
+            )
+            return settings
         except Exception as e:
             logger.warning("Failed to serialize battery settings: %s", e)
             return {}
@@ -797,10 +804,13 @@ class DebugDataAggregator:
         return snapshot
 
     def _serialize_inverter_tou(self) -> list[dict]:
-        """Serialize the current inverter TOU segments from memory.
+        """Serialize the TOU segments this controller intends to have on hardware.
 
-        Returns the segments that were last read from / written to the inverter,
-        so debug log replays can seed the mock with the real inverter state.
+        NOT a hardware read: active_tou_intervals is the *desired* schedule.
+        Since #551 that is explicitly not the same thing as what the inverter
+        holds — the two diverging is the bug that issue documents — so a replay
+        seeded from this reproduces the plan, not the inverter's real state.
+        Reproducing hardware drift needs a genuine read (see #553).
 
         Returns:
             List of TOU segment dicts as held in active_tou_intervals

@@ -13,7 +13,7 @@ communication.
 | Growatt SPH (Cloud) | Growatt SPH | [Growatt Server](https://www.home-assistant.io/integrations/growatt_server/) | Cloud API | AC charge/discharge periods | — |
 | Growatt MIX/SPH (Local) | Growatt MIX/SPA/SPH | [solax_modbus](https://github.com/wills106/homeassistant-solax-modbus) Growatt plugin | Local Modbus | Mode-specific time slots | GEN3 |
 | SolaX | SolaX hybrid | [solax_modbus](https://github.com/wills106/homeassistant-solax-modbus) | Local Modbus | VPP active-power commands | — |
-| Solis (EXPERIMENTAL) | Solis hybrid | [solis_modbus](https://github.com/Pho3niX90/solis_modbus) | Local Modbus | Grid Time of Use v2 (6 charge + 6 discharge periods) | — |
+| Solis | Solis hybrid | [solis_modbus](https://github.com/Pho3niX90/solis_modbus) | Local Modbus | Grid Time of Use v2 (6 charge + 6 discharge periods) | — |
 | Huawei LUNA2000 (Local) | Huawei LUNA2000 | [huawei_solar](https://github.com/wlcrs/huawei_solar) | Local Modbus | TOU period-list writes | — |
 
 > **solax_modbus generation mapping:** The `wills106/homeassistant-solax-modbus`
@@ -74,7 +74,7 @@ declares which it supports, mapped to BESS sensor keys): **charge window**
 | `solax_modbus_growatt_min` | TX-Modbus | SM-TOU-numbered (single-segment) | `SolaxModbusGrowattController` | `_GROWATT_TOU_MARKER_SUFFIX` (`time_1_enabled`) | `SOLAX_GROWATT_MIN_SUFFIX_MAP` |
 | `solax_modbus_growatt_sph` | TX-Modbus | SM-Mode-slots (GEN3, monitoring-only) | `SolaxModbusGrowattController` | `_GROWATT_GEN3_MARKER_SUFFIX` | `SOLAX_GROWATT_SPH_SUFFIX_MAP` |
 | `solax_modbus_native` | TX-Modbus | SM-Ephemeral (VPP) | `SolaxController` | `_SOLAX_NATIVE_MARKER_SUFFIX` (`remotecontrol_power_control`) | `SOLAX_NATIVE_SUFFIX_MAP` |
-| `solis_modbus` (EXPERIMENTAL) | TX-Modbus | SM-Period-lists (6 charge + 6 discharge) | `SolisModbusController` | `_SOLIS_TOU_MARKER_SUFFIX` (`time_entity_43711`) | `SOLIS_SUFFIX_MAP` + `SOLIS_DICT_EMBEDDED_SUFFIX_MAP` |
+| `solis_modbus` | TX-Modbus | SM-Period-lists (6 charge + 6 discharge) | `SolisModbusController` | `_SOLIS_TOU_MARKER_SUFFIX` (`time_entity_43711`) | `SOLIS_SUFFIX_MAP` + `SOLIS_DICT_EMBEDDED_SUFFIX_MAP` |
 | `huawei_solar_luna2000` | TX-Vendor-service | SM-Period-lists | `HuaweiController` | `_HUAWEI_BATTERY_MARKER_SUFFIX` (`storage_working_mode_settings`) | `HUAWEI_SUFFIX_MAP` |
 
 ### Bring-your-own integration
@@ -203,6 +203,12 @@ floor`, independent of strategic intent) but the actuation itself is
 gated by the `supports_export_limit_control` capability flag — currently
 only `SolaxModbusGrowattController` implements it. `growatt_server` (cloud)
 has no equivalent HA service to hook into and stays a safe no-op.
+
+This same condition is also computed at planning time (mirrored, not
+re-derived at dispatch) and exposed as `PeriodData.decision.curtailed`
+(#501), so the UI can show a period the plan expects to curtail as
+distinct from a genuinely profitable export — see
+`core/bess/dp_battery_algorithm.py`'s `_build_period_data`.
 
 ### Growatt MIX/SPH (Local) — `growatt_solax_modbus_gen3` (GEN3)
 
@@ -409,7 +415,7 @@ button.press(trigger)
 
 **Idle/solar mode:** Disables VPP, inverter reverts to self-use.
 
-### Solis — `solis_modbus` (EXPERIMENTAL)
+### Solis — `solis_modbus`
 
 Solis hybrids, connected via the community
 [`Pho3niX90/solis_modbus`](https://github.com/Pho3niX90/solis_modbus)
@@ -711,7 +717,7 @@ GEN4 above (`limit_grid_export` / `grid_export_limit`, registers 122/123) —
 | `solax_battery_min_soc` | number | `battery_minimum_capacity` | Min battery SOC (%) |
 | `solax_charger_use_mode` | select | `charger_use_mode` | Charger use mode (optional) |
 
-### Solis — `solis_modbus` integration (EXPERIMENTAL)
+### Solis — `solis_modbus` integration
 
 **Monitoring:**
 
@@ -766,10 +772,17 @@ Only slot 1 of each direction is strictly required; slots 2-6 are optional
 | `pv_power` | sensor | `input_power` | Real-time solar PV power (W) |
 | `import_power` / `export_power` | sensor | `power_meter_active_power` (separate power-meter device, signed) | Net grid power (W); both keys map to this entity, split by sign at read time (`grid_power_polarity`, `"export_positive"` — issue #438) |
 
-**Lifetime energy (optional):** see `HUAWEI_SUFFIX_MAP` in `ha_api_controller.py`
-for the five lifetime-energy suffixes added in #471/#473 (not reproduced here
-to avoid duplicating a list that will drift — the suffix map is the source of
-truth).
+**Lifetime energy:** see `HUAWEI_SUFFIX_MAP` in `ha_api_controller.py` for the
+five lifetime-energy suffixes added in #471/#473 (not reproduced here to
+avoid duplicating a list that will drift — the suffix map is the source of
+truth). These map to the same five core energy sensors `EnergyFlowCalculator`
+requires on every platform (`energy_flow_calculator.py`), so they're required
+for BESS to compute energy flows on Huawei too, same as elsewhere — not
+optional. `grid_exported_energy`/`grid_accumulated_energy` specifically come
+from the separate power-meter device (see the real-time grid-power row
+above); an install with no power meter genuinely cannot report them, and the
+health check correctly reports that as an error rather than silently
+reporting OK.
 
 **Auto-detection:** `HUAWEI_SUFFIX_MAP` is wired into `discover_sensors_from_registry`
 (the same production entity-registry scan every other platform uses — fixed

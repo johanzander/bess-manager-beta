@@ -11,12 +11,21 @@ non-negotiable and apply to all agents.
 - NEVER speculate about file contents or behavior - read the file or run the code first
 - Before proposing any fix, show the exact code path and evidence (logs, source) that proves the root cause — do not guess at entity names, prefixes, or discovery logic
 
+## Issue Work
+
+- Any request to fix, resolve, or implement a GitHub issue (e.g. "fix #123",
+  "resolve this issue") MUST go through the `implement-issue` skill from the
+  start — not ad-hoc brainstorming, writing-plans, or direct edits. It already
+  encodes PR hygiene rules (e.g. don't commit plan files) that get skipped
+  otherwise.
+
 ## Agent Documentation Index
 
 | File | When to Read |
 |------|-------------|
 | [`docs/agents/rules.md`](docs/agents/rules.md) | **Always** — hard constraints |
 | [`docs/agents/architecture.md`](docs/agents/architecture.md) | Before any structural change |
+| [`docs/agents/optimizer-architecture.md`](docs/agents/optimizer-architecture.md) | **Normative** — before any change to the optimizer core (`action_selector.py`, `dp_battery_algorithm.py`, `pwl_window_dp.py`, `tie_detection.py`, flow derivation, intent, simulation) |
 | [`docs/agents/patterns.md`](docs/agents/patterns.md) | Before writing new code |
 | [`docs/agents/testing.md`](docs/agents/testing.md) | Before writing or changing tests |
 | [`docs/agents/workflow.md`](docs/agents/workflow.md) | Before any commit, PR, or release |
@@ -36,7 +45,7 @@ interface for managing battery schedules and monitoring energy flows.
 
 ```bash
 .venv/bin/pytest -m "not slow"           # fast tests (~3s, recommended)
-.venv/bin/pytest -m slow                 # algorithm/integration tests (~30min)
+.venv/bin/pytest -m slow                 # algorithm/integration tests (~4min)
 .venv/bin/pytest                         # run all tests
 .venv/bin/black . && .venv/bin/ruff check --fix .  # format and lint
 ./scripts/quality-check.sh               # full quality gate
@@ -147,11 +156,12 @@ of `analyzed`.
 The user pays per token. A long Opus session that re-reads a large context after
 every multi-minute wait is what runs up the bill — not the work itself.
 
-- **Default to Sonnet** (set in `.claude/settings.json`). Use Opus only for a
-  genuinely hard reasoning step, say so, and drop back. Don't run routine
-  coordination, iteration, CI-watching, or file edits on Opus.
-- **Never spawn Opus subagents**, and avoid agents for long-running watches
-  entirely; if delegation is truly needed, use a cheap model.
+- **Pick the best-fit model per task.** No model is pinned in
+  `.claude/settings.json`, so sessions start on the Claude Code default.
+  Reach for a stronger model on genuinely hard reasoning, and prefer a
+  cheaper one for routine coordination, iteration, CI-watching, or file edits.
+- **Don't put subagents on an expensive model**, and avoid agents for
+  long-running watches entirely; if delegation is truly needed, use a cheap model.
 - **Don't hold one big session across many long CI/test waits.** The prompt
   cache expires after ~5 min, so each long wait forces a full uncached re-read
   of the entire context. Prefer `/clear` between unrelated chunks, or let the

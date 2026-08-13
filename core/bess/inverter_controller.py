@@ -147,15 +147,6 @@ class InverterController(ABC):
         #282). Override on a platform whose hardware resolution differs."""
         return max_discharge_power_kw / 100
 
-    @property
-    def self_throttle_export_threshold_kwh(self) -> float:
-        """Discharge overshoot (kWh) below which this platform silently
-        delivers only what the home needs rather than exporting the excess
-        (Growatt MIN's `load_first` behavior, #240). Default: 0.01 kWh.
-        Override on a platform with no such self-throttle (e.g. one that
-        always writes an exact watt target)."""
-        return 0.01
-
     def __init__(self, battery_settings: BatterySettings) -> None:
         """Initialize shared inverter controller state."""
         if battery_settings is None:
@@ -713,11 +704,13 @@ class InverterController(ABC):
         intents: list[str] | None = None,
         actions: list[float] | None = None,
         soc_values: list[float | None] | None = None,
+        curtailed: list[bool] | None = None,
     ) -> list[dict]:
         """Get period groups with full control parameters for display/API.
 
         Groups consecutive 15-minute periods ONLY when ALL parameters are identical:
-        strategic intent, battery mode, grid charge, charge rate, and discharge rate.
+        strategic intent, battery mode, grid charge, charge rate, discharge
+        rate, and planned curtailment (#501).
 
         Args:
             intents: Optional list of strategic intents to group. If None,
@@ -727,6 +720,10 @@ class InverterController(ABC):
                      is also None or the period is out of range, action defaults to 0.0.
             soc_values: Optional per-period SOC end values (%). The last period's value
                         in each group is exposed as soc_end_pct in the result.
+            curtailed: Optional per-period planned-curtailment flags (#501),
+                       from PeriodData.decision.curtailed. Defaults to all
+                       False when omitted -- callers without curtailment
+                       data get the pre-#501 grouping behavior unchanged.
 
         Returns:
             List of period groups with all control parameters and time strings
@@ -750,6 +747,11 @@ class InverterController(ABC):
                 intent,
                 {"grid_charge": False, "charge_rate": 100, "discharge_rate": 0},
             )
+            period_curtailed = (
+                curtailed[period]
+                if curtailed is not None and period < len(curtailed)
+                else False
+            )
 
             action_kwh = 0.0
             if schedule_actions is not None and period < len(schedule_actions):
@@ -772,6 +774,7 @@ class InverterController(ABC):
                     "charge_rate": charge_rate,
                     "discharge_rate": discharge_rate,
                     "action_kwh": action_kwh,
+                    "curtailed": period_curtailed,
                 }
             )
 
@@ -787,6 +790,7 @@ class InverterController(ABC):
                 and ps["grid_charge"] == current_group["grid_charge"]
                 and ps["charge_rate"] == current_group["charge_rate"]
                 and ps["discharge_rate"] == current_group["discharge_rate"]
+                and ps["curtailed"] == current_group["curtailed"]
             ):
                 current_group["end_period"] = ps["period"]
                 current_group["count"] += 1
@@ -802,6 +806,7 @@ class InverterController(ABC):
                     "grid_charge": ps["grid_charge"],
                     "charge_rate": ps["charge_rate"],
                     "discharge_rate": ps["discharge_rate"],
+                    "curtailed": ps["curtailed"],
                     "count": 1,
                     "total_action_kwh": ps["action_kwh"],
                 }
@@ -836,6 +841,7 @@ class InverterController(ABC):
                     "duration_minutes": group["count"] * 15,
                     "total_action_kwh": group["total_action_kwh"],
                     "soc_end_pct": soc_end,
+                    "curtailed": group["curtailed"],
                 }
             )
         return result
@@ -862,13 +868,16 @@ class InverterController(ABC):
         """
 
     @abstractmethod
-    def write_to_hardware(
+    def sync_to_hardware(
         self,
         controller,
         effective_period: int,
-        current_tou: list,
     ) -> tuple[int, int]:
         """Write schedule to inverter hardware.
+
+        Implementations that need to know what the inverter currently holds
+        must read it from the inverter themselves — there is no caller-supplied
+        snapshot, because one that drifted out of sync caused issue #551.
 
         Returns:
             Tuple of (writes, disables)

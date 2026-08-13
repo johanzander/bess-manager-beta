@@ -98,12 +98,49 @@ implementation on a wrong diagnosis *or* a wrong placement.
 
 ### 4. Worktree + branch
 
-`git fetch origin main` first — `using-git-worktrees`' git fallback branches
+**Prune merged worktrees FIRST — this is the cleanup step, and it lives here
+on purpose.** The "After Merge" section at the bottom also removes a
+worktree, but it is defined as a separate later invocation, so it depends on
+someone choosing to come back — and nobody does. That postcondition ran zero
+times in ~40 issues and left 39 worktrees on disk, 24 of them long merged.
+Running the prune as a *precondition* of the next issue needs no memory: the
+next person to do issue work cleans up the last one's mess automatically.
+
+```bash
+# Worktrees whose PR has merged. NOTE: `git branch --merged` / `rev-list
+# origin/main..branch` DO NOT WORK here -- this repo squash-merges, so a
+# merged branch's commits are never reachable from main and every worktree
+# looks unmerged forever. PR state is the only authoritative signal.
+merged=$(gh pr list --state merged --limit 200 --json headRefName -q '.[].headRefName')
+git worktree list | awk 'NR>1 {print $1}' | while read -r wt; do
+  b=$(git -C "$wt" branch --show-current 2>/dev/null)
+  [ -n "$b" ] || continue                                   # detached: leave alone
+  echo "$merged" | grep -qx "$b" || continue                # not merged: leave alone
+  if [ -n "$(git -C "$wt" status --porcelain -uno)" ]; then # tracked edits: never auto-delete
+    echo "KEEP (uncommitted changes): $wt"; continue
+  fi
+  git worktree remove "$wt" && git branch -D "$b"
+done
+git fetch origin --prune
+```
+
+Two guards that matter: never remove a worktree with **uncommitted tracked
+changes** — report it and let a human decide (one such worktree held a
+375-line module that existed nowhere else) — and never touch a **detached or
+locked** worktree, which is usually another agent's live session.
+
+Then `git fetch origin main` — `using-git-worktrees`' git fallback branches
 from the current local `HEAD`, not `origin/main`, so a stale local checkout
 silently cuts the branch behind main (missed release cuts, changelog
 rewrites, other merged fixes), surfacing later as an avoidable merge
 conflict. Then invoke `superpowers:using-git-worktrees`, basing the new
 branch on `origin/main`.
+
+**Do not change the session's worktree while a background agent spawned from
+it is still running.** The agent's isolation follows the session, so
+switching drags it into the new worktree mid-run — observed in practice: a
+`code-review` invocation resolved against the wrong worktree and reviewed an
+unrelated docs file instead of the diff. Finish or await the agent first.
 
 ### 5. TDD implementation
 
@@ -135,6 +172,28 @@ DP-produced schedule — that is exactly the coverage gap that shipped
 undetected in PR #385 (`docs/agents/simulator.md`). Add such a unit test only
 as a supplement, never as the sole RED test, for this category of fix.
 
+**Assert the outcome, not the command.** The same rule stated the way it
+usually fails: a test that pins the value written to hardware —
+`vpp_power=+1`, `discharge_rate=100`, a TOU segment — proves the *mapping* is
+unchanged. It does not prove the battery held, the spike was covered, or the
+cost moved. Assert realized cost, SoE trajectory, or resulting flows wherever
+an execution model exists.
+
+Command-level assertions are legitimate **only** where no execution model
+does exist — Growatt VPP before #539, for instance, where
+`inverter_simulator` is TOU-only. When you write one, say in the test *why*
+the outcome could not be asserted. That note is what stops the next reader
+treating a mapping check as behavioural evidence, and it is the seam where
+the coverage should later be upgraded.
+
+**Verify the test fails without the fix.** Write it RED first, or revert the
+fix and watch it break — then say which you did in the PR body. This is not
+ceremony: in this codebase tests have repeatedly passed while proving less
+than claimed. A bound asserted on one side only missed the realistic middle;
+a whole-day comparison had its signal swamped by a second varying term; a
+fixture named a branch it could not reach. Each looked green. "The suite
+passes" is evidence the suite is satisfied, never that the behavior holds.
+
 If the diagnosis's evidence is a user-supplied debug log/bundle, build the
 scenario from that real data instead of a hand-assembled fixture:
 
@@ -160,10 +219,34 @@ trusting it. Reserve a standalone test file for what that harness genuinely
 can't express: a private method's internal formula, or plan-faithfulness
 (`R == P`) — `test_all_scenarios` never runs the inverter simulator.
 
+**Adding a fixture also means regenerating two artefacts (since #544).** Two
+meta-tests will fail the moment a new `*.json` lands in
+`core/bess/tests/unit/data/`, by design — they exist so a fixture cannot
+silently escape the pins:
+
+```bash
+.venv/bin/python scripts/capture_selector_goldens.py       # test_every_fixture_has_a_golden
+.venv/bin/python scripts/capture_vpp_baseline.py --add-new # test_every_fixture_has_a_vpp_baseline
+```
+
+`--add-new` records only the new fixture's plan. **Never run a full VPP
+re-baseline to make that test go green** — the script warns about this
+because a full re-baseline regenerates both halves of every entry, collapsing
+the recorded v10.0.2 drift to zero and destroying the signal
+`test_drift_from_the_released_version_is_recorded` exists to hold.
+
+Note what the goldens now pin per period, because it changes what counts as a
+behaviour change: `actions`, `strategic_intent`, `intra_period_discharge_allowed`
+and the SoE trajectory, all bit-exact, plus cost at 1e-9. So a fix that
+reclassifies an intent or flips the discharge gate — without moving a single
+kWh — is a golden diff and must be re-pinned deliberately, with the measured
+delta stated in the PR. That is the intended behaviour, not a broken test.
+
 ### 6. Quality gate + code review (background)
 
 Every PR must pass both the fast and slow suites, plus code review. This is
-the long-wait step (slow suite is ~30min) — per `CLAUDE.md`'s Cost
+the long-wait step (slow suite ~4 min, measured 2026-08-11; the "~30 min"
+this used to claim predates the vectorized backward pass) — per `CLAUDE.md`'s Cost
 Discipline, do NOT hold the session open watching it run. Always a
 background `Agent` — this is not a choice to put to the user; asking
 "subagent or inline?" is itself the thing to stop doing (no `isolation` —
@@ -272,8 +355,33 @@ go straight to executing Option 2, do not present its 3-option menu, body:
 - [ ] `./scripts/quality-check.sh` passes locally (already done)
 - [ ] <what you actually observed in Step 8 — be concrete>
 
+## Evidence the test discriminates
+<REQUIRED. Not "the suite passes". The mutation you ran and what broke:>
+- Reverted: <the exact line/behaviour you undid>
+- Result: `<test name>` FAILED, <N> test(s) total
+- Restored: tree clean
+
+## Outcome-level coverage
+<REQUIRED. Which outcome pin now covers this behaviour:>
+- <expected_results on fixture X | intents/gate in the goldens | R == P via
+  run_scenario_realized | none, because …>
+
 Closes #<n>
 ```
+
+**These two sections are the point of the PR, not paperwork.** A reviewer
+cannot tell a real guard from a vacuous one by reading it — three times in
+this codebase a test has passed while proving nothing (#399 asserted an
+internal flag instead of a write count; #302 asserted nothing at all; a
+gate-outcome test written during the 2026-08-11 audit went green on its first
+run while catching neither of the two mutations it claimed to catch). Every
+one of those looked fine in review. The mutation result is the only cheap
+thing that separates them, so it is stated where the reviewer reads, not left
+in a terminal scrollback.
+
+If you cannot produce a mutation that reddens your test, you have not
+demonstrated the bug — say so in the PR and stop, rather than filling the
+section in with the suite result.
 
 ### 10. Hard constraints
 
@@ -296,6 +404,11 @@ Closes #<n>
 A **separate, later invocation** — often a different session, sometimes days
 later once CI is green and the user has reviewed. Not part of the numbered
 flow above, which stops at draft-PR-open per the Step 10 constraints.
+
+**Treat this as best-effort, not the cleanup mechanism.** Because it depends
+on someone returning after the merge, it reliably does not happen; Step 4's
+prune is the one that actually runs. If you are here, do it — but the safety
+net is upstream, not this section.
 
 1. Confirm the merge:
 
@@ -327,6 +440,9 @@ flow above, which stops at draft-PR-open per the Step 10 constraints.
 
 | Excuse | Reality |
 |---|---|
+| "the test asserts the exact command we write to hardware, that's precise" | Precise about the mapping, silent about the outcome. It stays green when the mapping is right and the physics is wrong. Assert realized cost / SoE / flows wherever an execution model exists. |
+| "it's green, so the fix works" | Green means the suite is satisfied. Revert the fix and watch the test fail — if it doesn't, it was never evidence. |
+| "I can see the assertion is right, no need to run it red" | Assertions that look right have repeatedly bounded only one side, or compared a quantity a second varying term swamped. Seeing it fail is the cheap part. |
 | "quality-check.sh passed, that's enough" | Green tests prove the suite is satisfied, not that the fix behaves correctly against the real scenario. Step 8 requires observed output, every time. |
 | "the diagnosis is obviously right, skip the confirm gate" | Wrong diagnoses are exactly when confidence is highest. One message, cheap insurance. |
 | "I'll clean up this other thing while I'm in here" | Out of scope. Minimal fix only. |
@@ -334,6 +450,9 @@ flow above, which stops at draft-PR-open per the Step 10 constraints.
 | "there's already a bot diagnosis, let me re-derive it anyway to be safe" | Re-verify the cited evidence; don't redo the whole investigation. |
 | "the plan doc is useful context, keep it in the PR" | Once code and tests exist, the plan only drifts — it's not the source of truth. Delete it before Step 9; keep the spec if one exists. |
 | "the user is in a hurry, just open the PR" | Time pressure from the user is not permission to skip Step 8 — it's the reason to say so explicitly and give a real ETA instead. |
+| "I'll clean up the worktree after it merges" | You won't — that's the postcondition that already failed 24 times. Prune at Step 4, before creating the next one. |
+| "`git branch --merged` will tell me what's safe to delete" | Not in this repo. Squash-merge means a merged branch is never an ancestor of main, so that check reports *everything* as unmerged and the cleanup silently never fires. Use `gh pr list --state merged`. |
+| "I'll just hop into the other worktree for a second" | Not while a background agent spawned from this session is running — its isolation follows you and its tooling starts resolving against the wrong checkout. |
 | "I'll just watch the background agent run" | Defeats the point — the whole reason it's backgrounded is so the session isn't held open through the slow suite. Let the notification bring you back. |
 | "the fix is small, docs don't need touching" | Small fixes are exactly what silently invalidates a one-line doc claim (a removed threshold, a renamed formula). Grep the two design docs before opening the PR, every time. |
 | "a unit test on the changed function is enough" | Not for DP/intent/control-mapping changes — a synthetic-input unit test can pass while the new branch is unreachable by any real optimizer-derived scenario. `docs/agents/simulator.md` requires `R == P` for exactly this class of change. |
