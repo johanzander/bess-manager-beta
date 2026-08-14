@@ -481,7 +481,7 @@ export const INTEGRATIONS: IntegrationDef[] = [
           { key: 'battery_charging_power_rate', label: 'Maximum Charging Power', required: false },
           { key: 'battery_discharging_power_rate', label: 'Maximum Discharging Power', required: false },
           { key: 'battery_charge_stop_soc', label: 'Charging Cutoff Capacity', required: true },
-          { key: 'battery_discharge_stop_soc', label: 'Grid-Charge Cutoff SOC', required: true },
+          { key: 'battery_discharge_stop_soc', label: 'Discharging Cutoff Capacity', required: true },
           { key: 'grid_charge', label: 'Charge From Grid Function', required: false },
         ],
       },

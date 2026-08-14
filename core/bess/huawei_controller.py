@@ -30,6 +30,10 @@ from .settings import BatterySettings
 logger = logging.getLogger(__name__)
 
 WORKING_MODE_TOU = "time_of_use_luna2000"
+WORKING_MODE_EQUIVALENTS = {
+    "time_of_use_luna2000": WORKING_MODE_TOU,
+    "Time Of Use": WORKING_MODE_TOU,
+}
 
 # The integration this platform normally drives. An install pointing
 # inverter.service_domain elsewhere is declaring a compatible integration
@@ -43,6 +47,20 @@ DEFAULT_SERVICE_DOMAIN = "huawei_solar"
 # the same way, so a fixed all-days string is sufficient; see open item #1
 # in the design doc for live-hardware confirmation of this convention.
 ALL_DAYS = "1234567"
+
+
+def _resolve_tou_working_mode(available_modes: list[str]) -> str:
+    """Resolve the integration's exposed option for Huawei TOU control."""
+    if not available_modes:
+        return WORKING_MODE_TOU
+    for exposed_mode, canonical_mode in WORKING_MODE_EQUIVALENTS.items():
+        if canonical_mode == WORKING_MODE_TOU and exposed_mode in available_modes:
+            return exposed_mode
+    raise SystemConfigurationError(
+        "Connected Huawei battery does not expose a supported Time Of Use "
+        f"working mode (available modes: {available_modes}). "
+        f"Supported options: {list(WORKING_MODE_EQUIVALENTS)}."
+    )
 
 
 class HuaweiController(InverterController):
@@ -279,9 +297,9 @@ class HuaweiController(InverterController):
         First confirms the connected battery is LUNA2000 (via the
         integration-exposed working-mode option list — see
         HomeAssistantAPIController.get_huawei_working_mode_options), then
-        gates the write behind the working-mode select: sets it to
-        time_of_use_luna2000 only when drifted, then writes the full
-        period list (always a full rewrite — no differential update).
+        gates the write behind the working-mode select: sets it to the
+        integration's equivalent TOU option only when drifted, then writes
+        the full period list (always a full rewrite — no differential update).
 
         The whole gate is skipped when no working-mode entity is mapped.
         Installs behind an energy manager (Huawei EMMA, PR #412) expose no
@@ -292,8 +310,7 @@ class HuaweiController(InverterController):
 
         Raises:
             SystemConfigurationError: If the connected battery does not
-                expose 'time_of_use_luna2000' as a working-mode option
-                (i.e. it's an LG RESU battery, not supported).
+                expose a supported LUNA2000/EMMA Time Of Use option.
         """
         writes = 0
 
@@ -320,22 +337,17 @@ class HuaweiController(InverterController):
             )
         else:
             available_modes = controller.get_huawei_working_mode_options()
-            if available_modes and WORKING_MODE_TOU not in available_modes:
-                raise SystemConfigurationError(
-                    "Connected Huawei battery does not support "
-                    f"'{WORKING_MODE_TOU}' (available modes: {available_modes}). "
-                    "Only LUNA2000 batteries are supported — LG RESU is not."
-                )
+            target_mode = _resolve_tou_working_mode(available_modes)
 
             current_mode = controller.get_huawei_working_mode()
-            if current_mode != WORKING_MODE_TOU:
+            if current_mode != target_mode:
                 logger.info(
                     "HUAWEI HARDWARE: working mode is %r, setting to %r",
                     current_mode,
-                    WORKING_MODE_TOU,
+                    target_mode,
                 )
                 try:
-                    controller.set_huawei_working_mode(WORKING_MODE_TOU)
+                    controller.set_huawei_working_mode(target_mode)
                     writes += 1
                 except Exception as e:
                     logger.error("FAILED: set_huawei_working_mode: %s", e)

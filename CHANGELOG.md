@@ -4,6 +4,15 @@ All notable changes to BESS Battery Manager will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **Huawei custom integrations can be configured manually**, with their single signed battery-power sensor supplying both charge and discharge readings without auto-discovery. ([#98](https://github.com/johanzander/bess-manager-beta/issues/98))
+- **Huawei EMMA schedules accept its translated `Time Of Use` working mode**, instead of requiring the stock integration’s `time_of_use_luna2000` option. ([#98](https://github.com/johanzander/bess-manager-beta/issues/98))
+- **Huawei discharge-stop SOC writes now target the battery minimum-SOC control**, rather than the unrelated grid-charging cutoff. ([#98](https://github.com/johanzander/bess-manager-beta/issues/98))
+- **Nord Pool health checks reuse valid prices already fetched for today**, avoiding redundant Home Assistant service calls and transient timeout errors. ([#98](https://github.com/johanzander/bess-manager-beta/issues/98))
+
 ## [10.1.0b8] - 2026-08-13
 
 Delta from `v10.1.0b7`. Everything else accumulated in `Unreleased` on main

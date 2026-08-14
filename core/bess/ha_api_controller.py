@@ -18,7 +18,7 @@ import websocket
 from .energy_balance import derive_load_consumption
 from .exceptions import SystemConfigurationError
 from .runtime_failure_tracker import RuntimeFailureTracker
-from .settings_store import SettingsStore
+from .settings_store import SettingsStore, derive_platform_sensor_aliases
 
 logger = logging.getLogger(__name__)
 # logger.setLevel(logging.DEBUG)
@@ -896,7 +896,7 @@ class HomeAssistantAPIController:
         "storage_maximum_charging_power": "battery_charging_power_rate",
         "storage_maximum_discharging_power": "battery_discharging_power_rate",
         "storage_charging_cutoff_capacity": "battery_charge_stop_soc",
-        "storage_grid_charge_cutoff_state_of_charge": "battery_discharge_stop_soc",
+        "storage_discharging_cutoff_capacity": "battery_discharge_stop_soc",
         "storage_charge_from_grid_function": "grid_charge",
         "storage_working_mode_settings": "huawei_working_mode",
         "active_power": "local_load_power",
@@ -3787,13 +3787,9 @@ class HomeAssistantAPIController:
                 # the grid case below). Point battery_discharge_power at the
                 # same entity so HAApiController's signed split
                 # (battery_power_polarity) can derive both readings from it.
-                if (
-                    "battery_charge_power" in solax_sensors
-                    and "battery_discharge_power" not in solax_sensors
-                ):
-                    solax_sensors["battery_discharge_power"] = solax_sensors[
-                        "battery_charge_power"
-                    ]
+                solax_sensors = derive_platform_sensor_aliases(
+                    "solax_modbus_native", solax_sensors
+                )
                 platform_sensors["solax_modbus_native"] = solax_sensors
                 platform_disabled["solax_modbus_native"] = solax_disabled
                 if not detected_platform:
@@ -3859,13 +3855,9 @@ class HomeAssistantAPIController:
             # register (reg 37765, positive = charging) with no discharge
             # counterpart — same pairing, one layer down (#542). See
             # PLATFORM_BATTERY_POWER_POLARITY["huawei_solar_luna2000"].
-            if (
-                "battery_charge_power" in huawei_sensors
-                and "battery_discharge_power" not in huawei_sensors
-            ):
-                huawei_sensors["battery_discharge_power"] = huawei_sensors[
-                    "battery_charge_power"
-                ]
+            huawei_sensors = derive_platform_sensor_aliases(
+                "huawei_solar_luna2000", huawei_sensors
+            )
             platform_sensors["huawei_solar_luna2000"] = huawei_sensors
             platform_disabled["huawei_solar_luna2000"] = huawei_disabled
             if not detected_platform:

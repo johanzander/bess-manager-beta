@@ -393,7 +393,6 @@ export function SensorConfigSection({ sensors, onChange, inverterForm, onInverte
                 </TabsTrigger>
                 <TabsTrigger
                   value="huawei"
-                  disabled={wizardMode && !huaweiDetected}
                   className="data-[state=active]:bg-white dark:data-[state=active]:bg-gray-600 dark:text-gray-300 dark:data-[state=active]:text-white"
                 >
                   <span className="flex items-center gap-1.5">

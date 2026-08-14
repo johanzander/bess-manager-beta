@@ -710,6 +710,29 @@ class PriceManager:
             "last_run": datetime.now().isoformat(),
         }
 
+        if (
+            self._today_date == time_utils.today()
+            and self._today_prices is not None
+            and self._today_prices
+        ):
+            price_check.update(
+                {
+                    "status": "OK",
+                    "checks": [
+                        {
+                            "name": "Price cache",
+                            "status": "OK",
+                            "error": None,
+                            "value": (
+                                f"Using {len(self._today_prices)} cached prices "
+                                "for today"
+                            ),
+                        }
+                    ],
+                }
+            )
+            return [price_check]
+
         # Get health check from price source
         try:
             source_health = self.price_source.perform_health_check()
