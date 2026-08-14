@@ -124,6 +124,18 @@ PLATFORM_BATTERY_POWER_POLARITY = {
 }
 
 
+def derive_platform_sensor_aliases(platform: str, sensors: dict) -> dict:
+    """Return platform sensors with aliases for shared signed registers."""
+    result = dict(sensors)
+    if (
+        PLATFORM_BATTERY_POWER_POLARITY.get(platform)
+        and result.get("battery_charge_power")
+        and not result.get("battery_discharge_power")
+    ):
+        result["battery_discharge_power"] = result["battery_charge_power"]
+    return result
+
+
 def flatten_sensors(sensors: dict) -> dict:
     """Flatten a per-platform sensors dict into a flat sensor_key -> entity_id dict.
 
@@ -154,7 +166,7 @@ def flatten_sensors(sensors: dict) -> dict:
         result.update(shared_sensors)
     if isinstance(platform_sensors, dict):
         result.update(platform_sensors)
-    return result
+    return derive_platform_sensor_aliases(platform, result)
 
 
 class SettingsStore:

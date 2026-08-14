@@ -300,6 +300,50 @@ class TestSaveAll:
 
 
 # ---------------------------------------------------------------------------
+# Signed battery-power aliases
+# ---------------------------------------------------------------------------
+
+
+def test_manual_huawei_power_mapping_derives_discharge_from_signed_sensor():
+    store = SettingsStore()
+    store.data = {
+        "inverter": {"platform": "huawei_solar_luna2000"},
+        "sensors": {
+            "platform": "huawei_solar_luna2000",
+            "shared": {},
+            "huawei_solar_luna2000": {
+                "battery_charge_power": (
+                    "sensor.huawei_emma_a02_battery_charge_discharge_power"
+                )
+            },
+        },
+    }
+
+    active = store.get_active_sensors()
+
+    assert (
+        active["battery_discharge_power"]
+        == "sensor.huawei_emma_a02_battery_charge_discharge_power"
+    )
+
+
+def test_platform_with_separate_power_sensors_does_not_derive_discharge():
+    store = SettingsStore()
+    store.data = {
+        "inverter": {"platform": "growatt_server_min"},
+        "sensors": {
+            "platform": "growatt_server_min",
+            "shared": {},
+            "growatt_server_min": {
+                "battery_charge_power": "sensor.growatt_battery_charging_w"
+            },
+        },
+    }
+
+    assert "battery_discharge_power" not in store.get_active_sensors()
+
+
+# ---------------------------------------------------------------------------
 # apply_discovered — additive merging
 # ---------------------------------------------------------------------------
 

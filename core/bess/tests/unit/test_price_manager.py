@@ -351,3 +351,48 @@ def test_get_available_prices_returns_tuple():
         assert isinstance(sell, list)
         assert len(buy) == 96
         assert len(sell) == 96
+
+
+def test_health_check_reuses_valid_prices_cached_for_today():
+    source = MockSource(test_prices=[0.5] * 96)
+    manager = PriceManager(
+        price_source=source,
+        markup_rate=0.05,
+        vat_multiplier=1.25,
+        additional_costs=0.0,
+        tax_reduction=0.0,
+        area="SE3",
+    )
+    manager.get_today_prices()
+
+    with patch.object(source, "perform_health_check") as source_health:
+        [result] = manager.check_health()
+
+    source_health.assert_not_called()
+    assert result["status"] == "OK"
+    assert result["checks"][0]["value"] == "Using 96 cached prices for today"
+
+
+def test_health_check_refetches_after_cached_price_date_expires():
+    source = MockSource(test_prices=[0.5] * 96)
+    manager = PriceManager(
+        price_source=source,
+        markup_rate=0.05,
+        vat_multiplier=1.25,
+        additional_costs=0.0,
+        tax_reduction=0.0,
+        area="SE3",
+    )
+    today = time_utils.today()
+    manager.get_today_prices()
+
+    with (
+        patch.object(time_utils, "today", return_value=today + timedelta(days=1)),
+        patch.object(
+            source, "perform_health_check", wraps=source.perform_health_check
+        ) as source_health,
+    ):
+        [result] = manager.check_health()
+
+    source_health.assert_called_once_with()
+    assert result["status"] == "OK"
