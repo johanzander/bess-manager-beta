@@ -4,6 +4,21 @@ All notable changes to BESS Battery Manager will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [10.1.0b9] - 2026-08-15
+
+Delta from `v10.1.0b8`. Everything else accumulated in `Unreleased` on main
+already shipped in `v10.1.0b8` or earlier; this release covers only what is
+genuinely new since then.
+
+### Fixed
+
+- **Growatt MIN TOU segments are now written to the inverter only once they are about to take effect**, roughly halving inverter writes: a segment hours away no longer gets rewritten every time the plan shifts around a marginal period. ([#554](https://github.com/johanzander/bess-manager/issues/554))
+- **A running Growatt MIN TOU segment is no longer rewritten every 15 minutes** — its start time was being truncated forward each cycle, so an unchanged two-hour window cost 16 inverter writes instead of 2. ([#554](https://github.com/johanzander/bess-manager/issues/554))
+- **A temporary Nordpool outage no longer tells you to fix your configuration** — the health check now reports the price source as temporarily unavailable, and the expected daily "tomorrow's prices not published yet" call no longer counts as a runtime failure. ([#583](https://github.com/johanzander/bess-manager/issues/583))
+- **SolaX (native), Solis, Huawei and Growatt SPH no longer get a plan their hardware can't deliver** — the optimizer's exact-load-cover action assumes the inverter throttles a discharge to the real house load; it is now offered only on platforms that actually do that. Growatt (cloud and solax_modbus, both control modes) is unaffected. ([#580](https://github.com/johanzander/bess-manager/issues/580))
+- **Huawei solar production now comes from the PV input counter instead of the inverter's AC yield**, which rose while the battery discharged — inflating reported house consumption and total savings. ([#569](https://github.com/johanzander/bess-manager/issues/569))
+- **Phase current sensors on a Huawei smart meter are now auto-detected** — meter-side `Phase A/B/C current` naming is recognised alongside `current_l1/l2/l3`, so fuse protection no longer needs manual entry. ([#120](https://github.com/johanzander/bess-manager/issues/120))
+- **Phase currents are now always taken from a single device** — a sub-circuit meter (heat pump, EV charger) could supply some phases and the grid meter the rest, giving a house current measured at no one point. The house feed is preferred over a sub-circuit, and a complete three-phase set over a partial one. ([#120](https://github.com/johanzander/bess-manager/issues/120))
 ## [10.1.0b8] - 2026-08-13
 
 Delta from `v10.1.0b7`. Everything else accumulated in `Unreleased` on main
