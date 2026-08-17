@@ -47,17 +47,28 @@ horizon.
 **Actions**: Charge, discharge, or idle at various power levels — filtered
 by physical constraints (available energy, remaining capacity, power limits).
 Discharge candidates enumerate the inverter's integer-percent rate grid,
-plus one deliberate off-lattice candidate (#466 follow-up): discharging
-exactly the forecast net-load residual when that residual is smaller than
-the smallest percent candidate (typical at solar/load crossovers around
-sunrise/sunset). Load-first hardware delivers `min(actual load, ceiling)`,
-so this action executes exactly as planned; it is gated so it always
-classifies as LOAD_SUPPORT and rounds to a nonzero rate register
-(`_residual_cover_p` in `dp_battery_algorithm.py`). Without it, those
-crossover periods had no executable discharge at all — sub-residual
-lattice candidates don't exist and overshooting ones are excluded as
-unexecutable (#497 below) — so IDLE won by default and the home imported
-the residual: the "morning IDLE" pattern users saw pre-fix.
+plus one deliberate off-lattice candidate (#466 follow-up, generalized by
+Phase 4b for #352): discharging exactly the forecast net-load residual,
+wherever the lattice cannot represent covering it. Load-first hardware
+delivers `min(actual load, ceiling)`, so commanding the smallest lattice
+step at or above the residual delivers the residual exactly — the plan is
+the *delivery*, the command is on the lattice. It is gated so it always
+classifies as LOAD_SUPPORT and so a covering ceiling actually exists on
+the platform (`_residual_cover_p` in `action_selector.py`, and
+`load_support_delivers_exact_cover` in `execution_model.py` — the
+candidate is withdrawn on hardware where a discharge number is a forced
+power rather than a ceiling, #580).
+
+Without it a period whose net load falls between two lattice steps has no
+action that covers the house: the step below under-covers and imports the
+difference at buy price, and every step above either is excluded as
+unexecutable (#497 below) or exports for real at sell price. With buy >
+sell that is a forced loss either way. Two user-visible symptoms came from
+exactly this gap — the "morning IDLE" pattern at sunrise/sunset crossovers
+(#466), and low-rate evening `BATTERY_EXPORT` periods written as
+`grid_first`, which does not load-follow, so a load spike was imported
+while the battery sat full (#352 Shape B). The export in the second case
+was never the goal; it was the cheaper of two bad roundings.
 
 **Transition**: Each action updates SOE accounting for charge/discharge
 efficiency losses and updates the **cost basis** of stored energy.
@@ -81,8 +92,12 @@ where `buy_prices` is the median over the full remaining horizon, capped at
 `max(sell_prices) * efficiency_discharge - cycle_cost` — an
 **arbitrage-consistency cap** that prevents the estimate from exceeding what
 could actually be realized by selling at the best available price
-(`core/bess/battery_system_manager.py:1841-1921`, `_calculate_terminal_value`;
-see issues #126/#244/#246/#345). This is the mechanism to check first for
+(the formula lives in `core/bess/terminal_value.py`, called by
+`BatterySystemManager._calculate_terminal_value`, which owns fetching its
+inputs and logging the result; see issues #126/#244/#246/#345/#422). The same
+function is what the forecast-robustness harness and the pinned scenario
+corpus price the boundary with, so all three optimize against one objective.
+This is the mechanism to check first for
 "why didn't the battery discharge everything right before midnight" or "why
 does it hold charge near the end of the horizon" — it applies at both the
 today-only and today+tomorrow boundary, so this remains the first thing to
@@ -324,9 +339,9 @@ hand — not downstream in `battery_system_manager.py`. The result is recorded a
 consumer (the BSM apply path and the inverter simulator) reads that boolean
 rather than re-deriving the comparison.
 
-The reason is that `shadow_price` is a *backward difference* between adjacent
-SoE grid levels, so it does not exist at the bottom level — and a SoE at or
-below the reserve floor clamps there. The DP used to skip the assignment in
+The reason is that `shadow_price` is a *one-sided slope* of the value function
+below the current state, so it does not exist at the bottom level — and a SoE at
+or below the reserve floor clamps there. The DP used to skip the assignment in
 that case, leaving the field at its `0.0` default, which is also what a
 genuinely worthless kWh produces. Any consumer comparing against the scalar
 therefore read "never computed" as "worth nothing", and `0.0` satisfies the
@@ -334,6 +349,24 @@ inequality for any positive buy price — so the ceiling opened on data nothing
 had computed. **`shadow_price` is now reporting-only; do not derive a decision
 from it.** Where no shadow price is computable there is no removable kWh below
 that state, so the authorization is `False`: absence is not permission.
+
+**How that slope is read (#571).** `_record_marginal_value` calls
+`_value_slope_below`, which returns the **left** one-sided derivative of the
+same piecewise-linear interpolant the policy walks (`_interpolate_value`) —
+left-sided because the gate authorizes energy *leaving* the battery, so what it
+must price is the value given up going down. It is deliberately not
+`_local_value_slope`, the right-sided reading the tie detector (#450) uses for a
+noise magnitude; swapping the two systematically over-opens the gate.
+
+Until #571 this function did its own index arithmetic, snapping to the *nearest*
+grid point with `round()` while the interpolant floors. A state in the lower
+half of a cell was therefore priced off the cell below — a region of the value
+function the battery is not in — so the reported marginal value stepped
+mid-cell instead of at cell boundaries. Signature in a bundle: two periods at
+almost the same SoE reporting different `shadow_price`, or an isolated period
+holding while its neighbours discharge. Measured effect of the fix on the
+fixture corpus: 142 of 2168 gate decisions flipped, 141 of them opening a gate
+that had been wrongly closed, with no change to planned energy or cost.
 
 What this works out to in practice — important for analysis:
 - During SOLAR_EXPORT the battery is full and exporting surplus, so its marginal
@@ -570,6 +603,17 @@ next positive-price block).
 (floors, caps, zeroing) manufactures indifference regions and MUST ship
 with an explicit tie-break policy stating which physically-preferred
 action wins inside the flat region — float noise is not a policy.
+
+Shaping is not the only source of a flat region (#606). Consecutive periods
+inside one hourly price block can be bit-identical in price, load and solar,
+and where they are all unconstrained the objective is *exactly* invariant to
+how a fixed total is split across them — only the sum reaches the next
+period. Every split is an optimum, so the choice fell to accumulated rounding
+in the value function (measured: 0.93 ULP) and the emitted plan differed by
+interpreter at bit-identical cost. `tie_policy.py`'s row 5 now resolves these
+by a stated order over actions. Signature in a bundle: adjacent periods with
+identical inputs whose actions permute between runs while total cost does
+not move at all.
 
 
 ## Execution Layer: What Can Override the Schedule

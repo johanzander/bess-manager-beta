@@ -4,6 +4,10 @@ All notable changes to BESS Battery Manager will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [10.1.0b10] - 2026-08-16
+
+Delta from `v10.1.0b9`. Everything else accumulated in `Unreleased` on main
+already shipped in `v10.1.0b9` or earlier; this release covers only what is
 ## [10.1.0b9] - 2026-08-15
 
 Delta from `v10.1.0b8`. Everything else accumulated in `Unreleased` on main
@@ -12,6 +16,11 @@ genuinely new since then.
 
 ### Fixed
 
+- **The battery now covers house load exactly instead of exporting a few Wh and committing the inverter** — a period whose load fell between two discharge steps was planned as a small export, which forces `grid_first` at a fixed rate and imports any load spike. ([#352](https://github.com/johanzander/bess-manager/issues/352))
+- **Huawei, native SolaX and Solis installs no longer report a discharge as negative charging, or an export as negative import** — the signed battery/grid sensor split now works on settings saved before the sensor pairing existed, with no wizard re-run. ([#604](https://github.com/johanzander/bess-manager/issues/604))
+- **The battery schedule no longer varies between otherwise identical runs** — when two plans were worth exactly the same, the optimizer picked between them on floating-point noise, so the same day could plan differently on different machines. ([#606](https://github.com/johanzander/bess-manager/issues/606))
+- **A running Growatt MIN TOU segment's end is no longer rewritten hours before the change matters** — nudging a live window's end waited on nothing, so it was written immediately even when the difference was hours away. ([#589](https://github.com/johanzander/bess-manager/issues/589))
+- **Isolated periods no longer import from a battery with charge to spare** — the discharge gate priced stored energy from the wrong point on its value curve, occasionally holding for one period while the periods either side discharged. ([#571](https://github.com/johanzander/bess-manager/issues/571))
 - **Growatt MIN TOU segments are now written to the inverter only once they are about to take effect**, roughly halving inverter writes: a segment hours away no longer gets rewritten every time the plan shifts around a marginal period. ([#554](https://github.com/johanzander/bess-manager/issues/554))
 - **A running Growatt MIN TOU segment is no longer rewritten every 15 minutes** — its start time was being truncated forward each cycle, so an unchanged two-hour window cost 16 inverter writes instead of 2. ([#554](https://github.com/johanzander/bess-manager/issues/554))
 - **A temporary Nordpool outage no longer tells you to fix your configuration** — the health check now reports the price source as temporarily unavailable, and the expected daily "tomorrow's prices not published yet" call no longer counts as a runtime failure. ([#583](https://github.com/johanzander/bess-manager/issues/583))

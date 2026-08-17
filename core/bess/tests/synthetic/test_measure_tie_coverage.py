@@ -134,8 +134,37 @@ def test_near_miss_segment_rejects_mismatched_input_lengths():
 # --------------------------------------------------------------------------
 
 
+def _at_zero_terminal_value(name):
+    """Load a fixture with its terminal value pinned to 0.0.
+
+    Every SEK constant in this suite was measured at `terminal_value_per_kwh
+    = 0.0`, which was the corpus-wide default until the fixtures were
+    retrofitted onto production-computed terminal values. That retrofit
+    dissolves most of the near-ties this suite measures: a nonzero terminal
+    row adds a value gradient at the horizon, and across the whole retrofitted
+    corpus only four fixtures still flag a tie window at all.
+
+    This suite's subject is the *detector and the near-miss measurement rig* --
+    "given a near-tie, is the coverage silence earned, and what is the miss
+    worth" -- so it has to run under a condition where near-ties exist. 0.0 is
+    that condition, and pinning it explicitly is why these constants remain
+    comparable to the ones recorded when they were first measured.
+
+    Pinned rather than re-measured deliberately: re-pinning the deltas against
+    the retrofitted values would replace a set of numbers that mean "this is
+    what the near miss costs" with a set that mostly mean "there is no longer
+    a near miss here", which is not the same test. Whether #450's hybrid path
+    still earns its keep at realistic terminal values is a real question -- the
+    largest surviving advantage in the corpus is 0.0043 SEK -- but it belongs
+    to #450, not to this rig's unit coverage.
+    """
+    scenario = dict(load_test_scenario(name))
+    scenario["terminal_value_per_kwh"] = 0.0
+    return scenario
+
+
 def _run_fixture(name):
-    scenario = load_test_scenario(name)
+    scenario = _at_zero_terminal_value(name)
     inputs = _scenario_inputs(scenario)
     diagnostics: dict = {}
     result = optimize_battery_schedule(**inputs, tie_diagnostics=diagnostics)
@@ -302,6 +331,14 @@ def test_reference_does_not_undershoot_the_hybrid_on_the_regression_segment():
     strictly-positive to non-negative -- the regression this test guards
     is a NEGATIVE delta (the reference coming out worse than the hybrid,
     the #450 feasibility defect), which stays forbidden.
+
+    Re-pinned again for Phase 4b (#352, the exact-cover candidate):
+    42.861695 / 42.861695, delta still exactly zero. This segment costs
+    +0.069435 SEK more than before while the fixture's full-horizon
+    objective *improves* 230.701009 -> 230.592975 (-0.108034) -- the plan
+    moved energy between segments, which is what a candidate-space change
+    does. The invariant under test is untouched: reference and hybrid
+    agree to the femto-öre, so the reference still does not undershoot.
     """
     scenario = load_test_scenario("historical_2024_08_16_high_spread_no_solar")
     inputs = _scenario_inputs(scenario)
@@ -312,8 +349,8 @@ def test_reference_does_not_undershoot_the_hybrid_on_the_regression_segment():
     reference_cost = _reference(inputs, result, Window(start=7, end=12), cost_bases)
 
     hybrid_cost = sum(period_costs[7:12])
-    assert hybrid_cost == pytest.approx(42.792260, abs=1e-5)
-    assert reference_cost == pytest.approx(42.792260, abs=1e-5)
+    assert hybrid_cost == pytest.approx(42.861695, abs=1e-5)
+    assert reference_cost == pytest.approx(42.861695, abs=1e-5)
     assert hybrid_cost - reference_cost >= -1e-9
 
 
@@ -426,7 +463,7 @@ def test_measures_a_real_near_miss_on_a_scenario_with_no_flags_at_all():
     itself. Both directions are stated in `segment_reference_cost`'s docstring
     and must survive into Task 6's reporting.
     """
-    scenario = load_test_scenario("synthetic_2024_08_16_high_spread_with_solar")
+    scenario = _at_zero_terminal_value("synthetic_2024_08_16_high_spread_with_solar")
     inputs = _scenario_inputs(scenario)
     diagnostics: dict = {}
     result = optimize_battery_schedule(**inputs, tie_diagnostics=diagnostics)
@@ -447,7 +484,11 @@ def test_measures_a_real_near_miss_on_a_scenario_with_no_flags_at_all():
     # independently of whether the PWL solver itself found the true optimum
     # (it does not always; see the undershoot test above).
     delta = sum(period_costs[segment.start : segment.end]) - reference_cost
-    assert delta == pytest.approx(0.053490, abs=1e-5)
+    # Re-pinned for Phase 4b (#352): 0.053490 -> 0.051273 SEK. The witness
+    # shrank, i.e. the grid DP leaves slightly *less* on the table here now
+    # that the exact-cover candidate is in the action space -- still
+    # positive, which is what this test asserts the existence of.
+    assert delta == pytest.approx(0.051273, abs=1e-5)
 
 
 @pytest.mark.slow
@@ -460,7 +501,7 @@ def test_scenario_with_no_measurable_period_reports_nothing_rather_than_guessing
     report "nothing measurable" instead of silently measuring an arbitrary
     segment and presenting its economics as a coverage result.
     """
-    scenario = load_test_scenario("historical_2025_01_05_no_spread_no_solar")
+    scenario = _at_zero_terminal_value("historical_2025_01_05_no_spread_no_solar")
     inputs = _scenario_inputs(scenario)
     diagnostics: dict = {}
     optimize_battery_schedule(**inputs, tie_diagnostics=diagnostics)
@@ -512,14 +553,14 @@ def test_measure_scenario_reports_a_real_non_zero_near_miss():
 
     Same fixture and segment as
     `test_measures_a_real_near_miss_on_a_scenario_with_no_flags_at_all` above,
-    which independently pins the delta at 0.053490 SEK by calling
+    which independently pins the delta at 0.051273 SEK by calling
     `replay_schedule`/`segment_reference_cost` directly. This test exercises
     the same numbers through the public `measure_scenario` entry point, so a
     wiring mistake in `measure_scenario` itself (wrong segment, wrong slice,
     wrong SOE trajectory) would show up here even though the lower-level
     pieces are already covered individually.
     """
-    scenario = load_test_scenario("synthetic_2024_08_16_high_spread_with_solar")
+    scenario = _at_zero_terminal_value("synthetic_2024_08_16_high_spread_with_solar")
 
     measurement = measure_scenario(scenario)
 
@@ -527,7 +568,7 @@ def test_measure_scenario_reports_a_real_non_zero_near_miss():
     assert sum(measurement.margin_ratio_counts.values()) == len(
         scenario["home_consumption"]
     )
-    assert measurement.financial_impact_sek == pytest.approx(0.053490, abs=1e-5)
+    assert measurement.financial_impact_sek == pytest.approx(0.051273, abs=1e-5)
 
 
 @pytest.mark.slow
@@ -539,7 +580,7 @@ def test_measure_scenario_reports_none_when_nothing_is_measurable():
     directly on this fixture. `measure_scenario` must propagate that as
     `financial_impact_sek=None` rather than measuring an arbitrary segment.
     """
-    scenario = load_test_scenario("historical_2025_01_05_no_spread_no_solar")
+    scenario = _at_zero_terminal_value("historical_2025_01_05_no_spread_no_solar")
 
     measurement = measure_scenario(scenario)
 
