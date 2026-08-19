@@ -4,14 +4,24 @@ All notable changes to BESS Battery Manager will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [10.1.0b11] - 2026-08-18
+
+Delta from `v10.1.0b10`. Everything else accumulated in `Unreleased` on main
+already shipped in `v10.1.0b10` or earlier; this release covers only what is
+genuinely new since then.
+
+### Fixed
+
+- **A tiny solar surplus is no longer planned as an export the inverter will absorb** — below the export the plan can express, the battery charged anyway and ran fuller than planned, spilling the difference later. ([#630](https://github.com/johanzander/bess-manager/issues/630))
+- **The setup wizard no longer locks you out of an inverter platform it failed to auto-detect** — every platform stays selectable, and a re-scan keeps the one you picked. ([#621](https://github.com/johanzander/bess-manager/issues/621))
+- **System no longer gets stuck on "initializing" when many consecutive periods are near-tied** — a long run of volatile prices could make every hourly optimization fail, leaving no schedule at all. ([#624](https://github.com/johanzander/bess-manager/issues/624))
+- **Grid charging now reaches the planned amount instead of stopping just short** — the charge rate is written as a whole percent, and rounding it down meant the battery charged slightly less than the plan counted on.
+- **Growatt VPP no longer briefly executes the previous period's power command when switching modes** — enabling remote control commits immediately, so the power target is now written before it, and cleared on release. ([#593](https://github.com/johanzander/bess-manager/issues/593))
+
 ## [10.1.0b10] - 2026-08-16
 
 Delta from `v10.1.0b9`. Everything else accumulated in `Unreleased` on main
 already shipped in `v10.1.0b9` or earlier; this release covers only what is
-## [10.1.0b9] - 2026-08-15
-
-Delta from `v10.1.0b8`. Everything else accumulated in `Unreleased` on main
-already shipped in `v10.1.0b8` or earlier; this release covers only what is
 genuinely new since then.
 
 ### Fixed
@@ -21,6 +31,15 @@ genuinely new since then.
 - **The battery schedule no longer varies between otherwise identical runs** — when two plans were worth exactly the same, the optimizer picked between them on floating-point noise, so the same day could plan differently on different machines. ([#606](https://github.com/johanzander/bess-manager/issues/606))
 - **A running Growatt MIN TOU segment's end is no longer rewritten hours before the change matters** — nudging a live window's end waited on nothing, so it was written immediately even when the difference was hours away. ([#589](https://github.com/johanzander/bess-manager/issues/589))
 - **Isolated periods no longer import from a battery with charge to spare** — the discharge gate priced stored energy from the wrong point on its value curve, occasionally holding for one period while the periods either side discharged. ([#571](https://github.com/johanzander/bess-manager/issues/571))
+
+## [10.1.0b9] - 2026-08-15
+
+Delta from `v10.1.0b8`. Everything else accumulated in `Unreleased` on main
+already shipped in `v10.1.0b8` or earlier; this release covers only what is
+genuinely new since then.
+
+### Fixed
+
 - **Growatt MIN TOU segments are now written to the inverter only once they are about to take effect**, roughly halving inverter writes: a segment hours away no longer gets rewritten every time the plan shifts around a marginal period. ([#554](https://github.com/johanzander/bess-manager/issues/554))
 - **A running Growatt MIN TOU segment is no longer rewritten every 15 minutes** — its start time was being truncated forward each cycle, so an unchanged two-hour window cost 16 inverter writes instead of 2. ([#554](https://github.com/johanzander/bess-manager/issues/554))
 - **A temporary Nordpool outage no longer tells you to fix your configuration** — the health check now reports the price source as temporarily unavailable, and the expected daily "tomorrow's prices not published yet" call no longer counts as a runtime failure. ([#583](https://github.com/johanzander/bess-manager/issues/583))
@@ -28,11 +47,25 @@ genuinely new since then.
 - **Huawei solar production now comes from the PV input counter instead of the inverter's AC yield**, which rose while the battery discharged — inflating reported house consumption and total savings. ([#569](https://github.com/johanzander/bess-manager/issues/569))
 - **Phase current sensors on a Huawei smart meter are now auto-detected** — meter-side `Phase A/B/C current` naming is recognised alongside `current_l1/l2/l3`, so fuse protection no longer needs manual entry. ([#120](https://github.com/johanzander/bess-manager/issues/120))
 - **Phase currents are now always taken from a single device** — a sub-circuit meter (heat pump, EV charger) could supply some phases and the grid meter the rest, giving a house current measured at no one point. The house feed is preferred over a sub-circuit, and a complete three-phase set over a partial one. ([#120](https://github.com/johanzander/bess-manager/issues/120))
+
 ## [10.1.0b8] - 2026-08-13
 
 Delta from `v10.1.0b7`. Everything else accumulated in `Unreleased` on main
 already shipped in `v10.1.0b7` or earlier; this release covers only what is
 genuinely new since then.
+
+### Changed
+
+- **Huawei LUNA2000 no longer rewrites TOU periods the battery already holds** — BESS reads the programmed periods back and skips the write when they match, sparing needless flash wear. ([#431](https://github.com/johanzander/bess-manager/issues/431))
+- **Debug bundles are several times smaller** — prediction snapshots now record only the periods whose plan changed, in a compact encoding, instead of rewriting the whole forecast each run. ([#555](https://github.com/johanzander/bess-manager/issues/555))
+
+### Fixed
+
+- **Reported lifetime house consumption is now correct on SolaX, Solis and Huawei**, which have no load register — it previously overstated load by the battery's lifetime net charge. ([#528](https://github.com/johanzander/bess-manager/issues/528))
+- **A missing consumption sensor no longer leaves the dashboard stuck on "Initializing"** — with the `sensor` strategy selected and no `48h_avg_grid_import` entity, the health check now reports a critical error, that strategy can't be selected without its sensor, and new installs default to `fixed`. ([#558](https://github.com/johanzander/bess-manager/issues/558))
+- **The setup wizard no longer completes with a configuration that cannot work** — it now blocks on inverter sensors whose Home Assistant entity is disabled (naming them so you can enable them) and on a price provider that isn't configured, instead of reporting "SYSTEM DEGRADED" afterwards. ([#549](https://github.com/johanzander/bess-manager/issues/549))
+- **Native SolaX and Huawei installs now auto-configure battery discharge power**, derived from the same signed sensor as charge power, instead of needing hand-built template sensors. ([#542](https://github.com/johanzander/bess-manager/issues/542))
+
 ## [10.1.0b7] - 2026-08-13
 
 Delta from `v10.1.0b6`. Everything else accumulated in `Unreleased` on main
@@ -49,15 +82,10 @@ covers only what's genuinely new since `v10.1.0b6`.
 
 ### Changed
 
-- **Huawei LUNA2000 no longer rewrites TOU periods the battery already holds** — BESS reads the programmed periods back and skips the write when they match, sparing needless flash wear. ([#431](https://github.com/johanzander/bess-manager/issues/431))
-- **Debug bundles are several times smaller** — prediction snapshots now record only the periods whose plan changed, in a compact encoding, instead of rewriting the whole forecast each run. ([#555](https://github.com/johanzander/bess-manager/issues/555))
+- **Finer battery optimization grid** — the DP's state/action resolution is halved (0.1 kW / 0.025 kWh), recovering 2.43 SEK/day of savings across the benchmark corpus while reducing solve time. ([#512](https://github.com/johanzander/bess-manager/issues/512))
 
 ### Fixed
 
-- **Reported lifetime house consumption is now correct on SolaX, Solis and Huawei**, which have no load register — it previously overstated load by the battery's lifetime net charge. ([#528](https://github.com/johanzander/bess-manager/issues/528))
-- **A missing consumption sensor no longer leaves the dashboard stuck on "Initializing"** — with the `sensor` strategy selected and no `48h_avg_grid_import` entity, the health check now reports a critical error, that strategy can't be selected without its sensor, and new installs default to `fixed`. ([#558](https://github.com/johanzander/bess-manager/issues/558))
-- **The setup wizard no longer completes with a configuration that cannot work** — it now blocks on inverter sensors whose Home Assistant entity is disabled (naming them so you can enable them) and on a price provider that isn't configured, instead of reporting "SYSTEM DEGRADED" afterwards. ([#549](https://github.com/johanzander/bess-manager/issues/549))
-- **Native SolaX and Huawei installs now auto-configure battery discharge power**, derived from the same signed sensor as charge power, instead of needing hand-built template sensors. ([#542](https://github.com/johanzander/bess-manager/issues/542))
 - **Growatt MIN TOU segments are now written against the inverter's real state**, ending repeated "500 Server Error" write failures and leaving no unplanned segments running on the battery. ([#551](https://github.com/johanzander/bess-manager/issues/551))
 - **House load spikes during a battery-supported period are now covered from the battery instead of the grid**, on TOU/register platforms, whenever the stored energy is worth less than importing at that moment (`buy_price × discharge_efficiency ≥ shadow_price`, decided by the optimizer). When the battery is genuinely being reserved for a pricier later period the reserve is still protected and the spike is imported. ([#520](https://github.com/johanzander/bess-manager/issues/520))
 - **Sub-period battery discharge is no longer permitted on an uncomputed value** — the ceiling opened whenever the battery sat at its reserve floor, where no marginal value exists. ([#526](https://github.com/johanzander/bess-manager/issues/526))
