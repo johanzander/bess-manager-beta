@@ -96,6 +96,45 @@ if find . -name "*.py" -not -path "./build/*" -not -path "./.venv/*" -not -path 
         echo "   Install with: python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt"
         ERRORS=$((ERRORS + 1))
     fi
+    # mypy, scoped to files this branch actually changed.
+    #
+    # `docs/agents/rules.md` requires mypy to pass, but nothing ran it: not
+    # this gate, not CI, and it was not even in requirements-dev.txt. Turning
+    # it on repo-wide is not an option — a measured 2914 errors across 191
+    # files, 417 of them outside tests. So the rule is enforced going forward
+    # instead of retroactively: code you touch must type-check, and the legacy
+    # backlog burns down as files get edited.
+    #
+    # Three sources, because each misses something the others catch:
+    # committed-on-this-branch, uncommitted-but-tracked, and untracked. The
+    # last one matters most — a brand-new file is untracked until its first
+    # commit, and this gate is meant to run BEFORE that commit. Leaving it out
+    # let a probe file with a known error pass the gate silently.
+    #
+    # A file deleted on this branch still appears in the diff, hence the -e
+    # test. No changed Python files is a pass, not a skip-with-warning.
+    #
+    if MYPY=$(py_tool mypy); then
+        echo "🔸 Checking mypy on changed files..."
+        # Delegated so CI and this script run byte-identical logic. The
+        # script owns merge-base resolution, file collection and the
+        # baseline comparison -- see scripts/mypy-changed.sh for why it is a
+        # ratchet rather than a clean-files check. Exit 2 (setup failure,
+        # e.g. an unresolvable main) is an ERROR here for the same reason an
+        # unresolvable base always was: a run that type-checked nothing must
+        # not report success.
+        # Resolved against this script's own location, not the cwd: the
+        # gate is run from the repo root in practice but not in its tests,
+        # and a cwd-relative path silently turns "gate passed" into "gate
+        # never ran".
+        if ! "$(dirname "${BASH_SOURCE[0]}")/mypy-changed.sh" "$MYPY" --include-worktree; then
+            ERRORS=$((ERRORS + 1))
+        fi
+    else
+        echo "❌ mypy not found in .venv/bin or on PATH — cannot verify types."
+        echo "   Install with: .venv/bin/pip install -r requirements-dev.txt"
+        ERRORS=$((ERRORS + 1))
+    fi
 else
     echo "ℹ️  No Python files found to check"
 fi
@@ -187,6 +226,7 @@ import json, re, sys
 #
 #   git push origin main --force        -> non_fast_forward on ~DEFAULT_BRANCH
 #   git push origin +beta-release-9.9   -> non_fast_forward on beta-release-*
+#   git push origin +release-9.9        -> non_fast_forward on release-*
 #   git push origin --delete <ref>      -> deletion on both of the above
 #   git push origin v9.9.0 (force/move) -> non_fast_forward on ~ALL tags
 #
@@ -201,11 +241,11 @@ import json, re, sys
 #   gh api repos/johanzander/bess-manager-beta/rulesets
 #
 # What this deliberately does NOT cover: force-pushing or deleting a FEATURE
-# branch (fix/**, feat/**) on origin, nor `release-X.Y` (see MUST_NOT_BE_GUARDED
-# below). Accepted residuals -- but NOT because "the damage is bounded to your
-# own unmerged branch". ~20 worktrees push in parallel as the same identity, so
-# a misaimed --force destroys another agent's commits and closes its PR, with
-# the recovering reflog sitting in a different worktree.
+# branch (fix/**, feat/**) on origin. An accepted residual -- but NOT because
+# "the damage is bounded to your own unmerged branch". ~20 worktrees push in
+# parallel as the same identity, so a misaimed --force destroys another agent's
+# commits and closes its PR, with the recovering reflog sitting in a different
+# worktree.
 #
 # Every entry below is a rule whose deletion is the exact regression this gate
 # was written for -- the GitHub-reaching and history-destroying guards. Keep
@@ -266,7 +306,8 @@ MUST_BE_DENIED = [
 # Checked against deny + ask: a prompt is an acceptable outcome for these.
 MUST_BE_GUARDED = [
     # git's global options may precede the subcommand -- the hook this
-    # replaced normalised for exactly this, and CLAUDE.md teaches `git -C` as
+    # replaced normalised for exactly this, and local-agent-environment.md
+    # teaches `git -C` as
     # the cross-checkout idiom, so it is the spelling most likely to be used.
     "git --no-pager gc --prune=now",
     "git -C sub tag -d v9.9.0",
@@ -339,15 +380,15 @@ MUST_NOT_BE_GUARDED = [
     # "all of them" -- do not read this list as a protection matrix:
     #
     #   main --force, +beta-release-*, v9.9.0 (tag)  -> refused by a ruleset
-    #   --delete release-X.Y                         -> NOT refused; no ruleset
-    #                                                   covers `release-*`
+    #   +release-X.Y (rewrite)                       -> refused by a ruleset
+    #   --delete release-X.Y                         -> ALLOWED, deliberately
     #
-    # That last line is a real residual, not an oversight to "fix" by putting
-    # the prompt back: `release-X.Y` is the short-lived hotfix branch created
-    # by the release skill (steps 2-6), it is pushed and tagged, and nothing
-    # currently protects it at either layer. The protected TAG preserves the
-    # released commit, so the branch is recoverable after tagging but not
-    # before. Closing it means adding a `release-*` ruleset, not an ask rule.
+    # That last line is a deliberate asymmetry, not a residual and not an
+    # oversight to "fix" by putting the prompt back. `release-X.Y` is the
+    # short-lived hotfix branch created by the release skill (steps 2-6);
+    # rewriting it is refused by the `release-*` ruleset, while deleting it
+    # once the release is out is ordinary cleanup. The protected TAG pins the
+    # released commit, so a spent branch costs nothing to lose.
     "git push", "git push -u origin main",
     "git push origin main --force",
     "git push origin +beta-release-9.9",
@@ -355,14 +396,16 @@ MUST_NOT_BE_GUARDED = [
     "git push origin v9.9.0",
     "git -C .claude/worktrees/x push origin main",
     "git -c push.default=current push beta main",
-    # Read-only stash inspection, which CLAUDE.md and rules.md both promise
+    # Read-only stash inspection, which local-agent-environment.md and
+    # rules.md both promise
     # keeps working. A blanket `git -* stash *` DENY caught these, and deny has
     # no override -- so the cross-checkout recipe was hard-blocked, not merely
     # prompted. That is why the stash twins name a verb.
     "git stash list", "git stash show",
     "git -C sub stash list",
     "git -C .claude/worktrees/x stash show",
-    # implement-issue Step 4 prunes worktrees in a loop; CLAUDE.md argues that
+    # implement-issue Step 4 prunes worktrees in a loop;
+    # local-agent-environment.md argues that
     # must stay unattended. A `git -* prune*` twin caught `worktree prune` and
     # `remote prune` through the same greedy glob, so the twin was dropped.
     "git -C /main worktree prune", "git worktree prune",
@@ -417,6 +460,193 @@ print(f"✅ Permission surface intact ({total} command shapes checked, "
 PY
 then
     ERRORS=$((ERRORS + 1))
+fi
+
+echo ""
+echo "📋 Checking bot workflow publish contract..."
+echo "-------------------------------------------"
+
+# Stage 2 (issue-analyze.yml) spent three days exiting `success` while posting
+# nothing -- five of nine non-skipped runs produced no comment and no label,
+# burning $0.33-1.58 each (#646). Every layer reported healthy: the run was
+# green, is_error false, permission_denials_count 0.
+#
+# Two independent things have to hold, and this gate checks BOTH because either
+# one alone leaves the failure silent:
+#
+#   1. The prompt must tell the agent to RUN a command to publish. Stage 2 said
+#      "Post ONE comment on the issue with this structure:" followed by a
+#      markdown template -- a description of a document, not an instruction to
+#      execute anything. These workflows run in AGENT mode (use_sticky_comment
+#      false, track_progress false), so the action posts nothing on the agent's
+#      behalf: an agent that renders the template as its final assistant message
+#      has, by its own lights, finished. It then never reaches the labelling
+#      step, which is why the label was untouched too.
+#
+#      The contrast is what makes this more than a story. On the SAME action
+#      version (459ad358 / CLI 2.1.234), Stage 4's review -- whose prompt names
+#      `gh pr review` explicitly -- landed an APPROVED verdict, while Stage 2
+#      went silent three times in three seconds. Stage 2 was the only bot
+#      workflow whose publish step was prose, and the only one that failed to
+#      publish.
+#
+#   2. The workflow must VERIFY it afterwards. The prompt fix is a behavioural
+#      argument about what a model will infer, so it cannot be trusted on its
+#      own -- the next upstream version may infer differently, exactly as this
+#      one did. Only a post-condition on the job makes that loud instead of
+#      green.
+#
+# Deliberately NOT checked for, and deliberately not built: a step that posts
+# the comment on the agent's behalf when it didn't. That is a second publishing
+# path whose only job is to route around the first one failing, and it would
+# mask the regression rather than surface it (docs/agents/rules.md, Debugging
+# Protocol step 8). The guard asserts; it does not repair.
+if ! python3 - <<'PY'
+import pathlib, re, sys
+
+WORKFLOWS = pathlib.Path(".github/workflows")
+
+# Workflows whose whole product is a comment on the issue. Stage 3 is excluded
+# on purpose: its product is a PR, which is observable without this check.
+PUBLISHERS = {
+    "issue-triage.yml": "gh issue comment",
+    "issue-analyze.yml": "gh issue comment",
+}
+
+bad = []
+
+for name, command in PUBLISHERS.items():
+    path = WORKFLOWS / name
+    if not path.is_file():
+        print(f"❌ {name} is missing -- the publish contract cannot be checked")
+        bad.append(name)
+        continue
+    if command not in path.read_text():
+        print(
+            f"❌ {name} never names `{command}`. Its publish step is prose, so "
+            "the agent can render it as a final message and exit success "
+            "having written nothing to GitHub (#646)."
+        )
+        bad.append(name)
+
+# The post-agent guard: a run that published nothing must fail the job. Checked
+# by the shape that actually does the work -- a step keyed on `if: always()`
+# that re-reads the issue -- rather than by step name, which renames freely.
+analyze = WORKFLOWS / "issue-analyze.yml"
+if analyze.is_file():
+    text = analyze.read_text()
+    has_always = re.search(r"^\s*if:\s*always\(\)\s*$", text, re.MULTILINE)
+    has_readback = "--json comments" in text and "--json labels" in text
+    if not (has_always and has_readback):
+        print(
+            "❌ issue-analyze.yml has no post-agent verification step. A run "
+            "that posts no comment and applies no label must FAIL the job, "
+            "not exit success (#646 acceptance criterion)."
+        )
+        bad.append("issue-analyze.yml:guard")
+
+if bad:
+    sys.exit(1)
+print(f"✅ Bot workflow publish contract intact ({len(PUBLISHERS)} publishers "
+      "name their command, Stage 2 verifies it posted)")
+PY
+then
+    ERRORS=$((ERRORS + 1))
+fi
+
+echo ""
+echo "📋 Checking bot workflow context contract..."
+echo "-------------------------------------------"
+
+# A workflow prompt must not tell its MAIN agent to read a `.claude/agents/*.md`
+# file. Those files are sub-agent system prompts: the sub-agent already has one
+# in full, so naming it as the main agent's REQUIRED READING loads a second copy
+# into a different context window, on every turn, for an agent that never runs
+# the procedure it describes.
+#
+# Stage 2 did exactly that with bess-analyst.md (25,681 B) and nothing consumed
+# it (#654). Its six steps are: get context, identify the current problem,
+# delegate, verify the cited file:line, publish, label -- no step applies a
+# "domain expertise checklist". Worse, the section of that file which could
+# plausibly serve as a judging standard (Separate Evidence from Claims) was
+# already restated inline in the sub-agent task the same prompt passes, so the
+# content was loaded three times over.
+#
+# The paired assertion matters as much as the removal: Stage 2 must still
+# DELEGATE. Dropping the read is the saving; dropping the delegation would gut
+# the stage, and the same "trim the prompt" instinct reaches for both.
+if ! python3 - <<'PY_CTX'
+import re, sys, pathlib
+
+WF = pathlib.Path(".github/workflows")
+bad = []
+
+for f in sorted(set(WF.glob("*.yml")) | set(WF.glob("*.yaml"))):
+    text = f.read_text()
+    for i, line in enumerate(text.splitlines(), 1):
+        # Match the shape the regression actually takes: a NUMBERED entry in a
+        # reading list, e.g. "3. .claude/agents/bess-analyst.md — checklist".
+        # Deliberately narrow. A prose line that merely names the path is not
+        # flagged, because the prompt now carries an explicit "Do NOT read
+        # .claude/agents/bess-analyst.md" note and a gate that fought its own
+        # documentation would be worse than one with a known edge. An
+        # unnumbered "read <path>" instruction would slip through; that is an
+        # accepted narrowness, not a claim of completeness.
+        if re.match(r"^\s*\d+\.\s+\.claude/agents/", line):
+            bad.append(f"{f}:{i}: main agent told to read a sub-agent definition: {line.strip()}")
+
+analyze = (WF / "issue-analyze.yml").read_text()
+_, _, prompt_block = analyze.partition("prompt: |")
+if not re.search(r"subagent_type[\s:`'\"]*bess-analyst", prompt_block):
+    bad.append("issue-analyze.yml: Stage 2 no longer delegates to the bess-analyst "
+               "sub-agent -- that delegation IS the stage")
+
+if bad:
+    for b in bad:
+        print(f"   {b}")
+    sys.exit(1)
+
+print("✅ Bot workflow context contract intact (no sub-agent definition read by a "
+      "main agent, Stage 2 still delegates)")
+PY_CTX
+then
+    echo "❌ Bot workflow context contract violated"
+    echo "   A sub-agent's definition is its own system prompt. Do not also list"
+    echo "   it as the main agent's REQUIRED READING (#654)."
+    ERRORS=$((ERRORS + 1))
+fi
+
+echo ""
+echo "📋 Checking agent context budget..."
+echo "-------------------------------------------"
+
+# Every bot stage loads CLAUDE.md before it does anything, on the main agent
+# and again on its sub-agent, and re-sends it on every turn. It is the largest
+# single item in the fixed context floor, so its size is a per-run cost on
+# Stages 1-5 and on every local session.
+#
+# It reached 45,488 B once, of which 33,743 B (74%) was one section describing
+# this machine -- the macOS sandbox, podman, worktrees, Playwright, the
+# permission rules. None of it can apply on a fresh ubuntu runner under
+# `--permission-mode bypassPermissions`, and it was billed on every turn of
+# every stage anyway (#650).
+#
+# The fix was to RELOCATE that content, not delete it: it lives in
+# docs/agents/local-agent-environment.md and is reached through the Agent
+# Documentation Index like every other doc. This gate keeps it from creeping
+# back inline. If you need to raise the cap, move content into docs/agents/
+# and link it instead -- that is the mechanism CLAUDE.md already uses.
+CLAUDE_MD_MAX_BYTES=16000
+CLAUDE_MD_BYTES=$(wc -c < CLAUDE.md | tr -d ' ')
+
+if [ "$CLAUDE_MD_BYTES" -gt "$CLAUDE_MD_MAX_BYTES" ]; then
+    echo "❌ CLAUDE.md is ${CLAUDE_MD_BYTES} B, over the ${CLAUDE_MD_MAX_BYTES} B budget"
+    echo "   Every bot stage loads this file on every turn, on two agents."
+    echo "   Move the new material into docs/agents/ and link it from the"
+    echo "   Agent Documentation Index rather than raising the cap (#650)."
+    ERRORS=$((ERRORS + 1))
+else
+    echo "✅ CLAUDE.md within context budget (${CLAUDE_MD_BYTES} B / ${CLAUDE_MD_MAX_BYTES} B)"
 fi
 
 echo ""

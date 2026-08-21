@@ -443,21 +443,57 @@ jobs:
     name: Code quality
     runs-on: ubuntu-latest
     steps:
+      # Full history: the mypy step below needs a real merge-base against
+      # main, which a shallow clone cannot produce.
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
           cache: pip
 
+      # The same two files every other Python job installs, not a hand-picked
+      # subset: mypy resolves imports from the environment, and with
+      # --ignore-missing-imports anything absent silently becomes Any. That
+      # cuts both ways. Missing `pytest` makes every `@pytest.fixture` and
+      # `@pytest.mark.parametrize` untyped, so an annotated test reports
+      # `untyped-decorator` here while type-checking clean in the local .venv
+      # -- and no amount of annotating closes it. Missing `fastapi` does the
+      # same to `@router.get`. Missing `numpy` goes the other way and MASKS
+      # real errors: pwl_window_dp.py reports 7 errors with numpy installed
+      # and 3 without, so a genuine mistake would pass the merge gate and
+      # fail only on the maintainer's machine.
       - name: Install tools
-        run: pip install black ruff
+        run: |
+          pip install -r backend/requirements.txt
+          pip install -r requirements-dev.txt
 
       - name: Black formatting
         run: black --check . --exclude="/(build|\.venv|node_modules)/"
 
       - name: Ruff linting
         run: ruff check . --exclude="build,.venv,node_modules"
+
+      # Scoped exactly like scripts/quality-check.sh: code you touch must
+      # type-check, and the legacy backlog burns down as files get edited.
+      # Repo-wide is not an option (2914 errors across 191 files).
+      #
+      # This job aggregates into the Merge gate, which is the single required
+      # status check on main. Enforcing mypy only in quality-check.sh would
+      # leave it unenforced on exactly the path that gates merges — a
+      # violation could still reach main through any ordinary PR, which is
+      # the gap this whole change exists to close.
+      - name: mypy on changed files
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin main
+          # Same script quality-check.sh runs, so a green local gate and a
+          # green CI gate mean the same thing. Without --include-worktree:
+          # CI has only the commit, and an untracked-file scan here would
+          # pick up build artefacts rather than authored code.
+          scripts/mypy-changed.sh mypy
 
   # ── Docker build & boot: verify production image starts ──────────
   docker-build-test:

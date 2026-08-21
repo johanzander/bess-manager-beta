@@ -4,6 +4,17 @@ All notable changes to BESS Battery Manager will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [10.1.0b12] - 2026-08-21
+
+Delta from `v10.1.0b11`. Everything else accumulated in `Unreleased` on main
+already shipped in `v10.1.0b11` or earlier; this release covers only what is
+genuinely new since then.
+
+### Fixed
+
+- **A brief Nordpool hiccup no longer produces a daily "recovered from an earlier issue" notice** — the health check re-fetched today's prices every five minutes instead of using the ones already held. ([#662](https://github.com/johanzander/bess-manager/issues/662))
+- **Growatt VPP now lets the inverter and BMS sleep through a long idle at minimum SoC** — an empty battery was still held under continuous remote control, which nothing was protecting. ([#592](https://github.com/johanzander/bess-manager/issues/592))
+
 ## [10.1.0b11] - 2026-08-18
 
 Delta from `v10.1.0b10`. Everything else accumulated in `Unreleased` on main
