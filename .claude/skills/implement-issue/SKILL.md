@@ -71,6 +71,54 @@ runners — only repo-level `.claude/skills/` and `.claude/agents/` exist there.
 | 11. Independent review loop | Skip — CI opens the PR as a draft and the owner triggers Stage 4 by hand after reading it. A CI run that requested its own review would be the fix bot grading itself on a PR nobody has looked at yet. `advance-pr` is therefore not invoked in CI, and the PR stays a draft: `gh pr ready` belongs to that skill, and there is no approval in CI mode to earn it. |
 | 12. Hard constraints | Apply verbatim. |
 
+## Headless local mode (dispatched container)
+
+`scripts/run-agent.sh <n>` runs this skill headless inside a Podman container,
+against a private clone bind-mounted at its own host path (Phase 1 of
+`docs/superpowers/specs/2026-08-20-agent-fleet-sandbox-router-design.md`).
+Headless is **not** CI, and the differences run the opposite way to CI mode's:
+the container is long-lived, it *can* run the app, and it answers its own
+gates instead of ending the run at them. The numbered Process applies verbatim
+except per this table.
+
+**You are in this mode when `BESS_HEADLESS_MODE=1` is set.** `run-agent.sh`
+sets it, along with `BESS_FLEET_CONTAINER` (this dispatch's id) and
+`BESS_FLEET_DB`.
+
+Three things that hold across every row:
+
+- **Never exit at a gate.** The whole point of a container that lives for the
+  issue's whole lifecycle is that Step 10's recovery of a PR gone
+  `CONFLICTING` under a merge, and Step 11's repeated `advance-pr` rounds,
+  keep running with nobody watching. A run that exited at Step 3 and waited to
+  be re-dispatched would turn that working loop back into a queue of manual
+  restarts. Post, block on `scripts/wait-for-reply.sh`, resume in place.
+- **Report status as it changes**, so the dispatch is legible without reading
+  logs: `scripts/fleet-manifest.sh update-status "$BESS_FLEET_CONTAINER" <status>`
+  — `needs_input` on entering a gate and `working` again on leaving one,
+  `in_review` for Step 11, `escalated` for a Step 12 bailout, `done` at a
+  terminal state.
+- **The plugin caveat is CI mode's, unchanged**: user-level plugins
+  (`superpowers:*`, `code-review`) are not in the image. Only repo-level
+  `.claude/skills/` and `.claude/agents/` exist, and those arrive inside the
+  clone.
+
+| Step | Headless local mode |
+|---|---|
+| 0. Resume check | Applies, with a different registry: this container has a private **clone**, not a worktree, so `git worktree list` on the host cannot see it and the host's worktrees are none of its business. `scripts/fleet-manifest.sh list` is the enumeration. The clone is reused across dispatches and is host-persistent, so prior commits in it are exactly the resumable work Step 0 exists to find — never discard them. |
+| 1. Fetch & scope | Verbatim. |
+| 2. Diagnose | Verbatim — **unlike CI mode**, self-diagnosis is correct here. The maintainer typing `run-agent.sh <n>` is the same explicit go-ahead as starting an interactive session; there is no analyze/fix split to protect, and no Stage 2 comment to require. |
+| 3. Confirm gate | Post the design + workaround check + scope assessment with `scripts/gh-agent.sh --as dev` (to the issue; to the PR once one exists), set status `needs_input`, then `scripts/wait-for-reply.sh <n> <now-iso8601>` and continue **in this process** on its reply — accepted only from the repo owner (`--from` defaults to it), so a stranger's drive-by comment cannot steer the dispatch. Not CI's behaviour of treating a trigger comment as pre-granted consent, and not a stop. The escalation path (dispatch a general-purpose `Agent` to critique) applies verbatim. |
+| 4. Worktree + branch | The clone *is* the isolation — `run-agent.sh` created it and ran `scripts/worktree-setup.sh --target-dir`, so create the branch directly and skip worktree creation. **Skip the merged-worktree prune too**: those worktrees belong to the host checkout, are not visible from in here, and are not this dispatch's to clean. Then report the branch: `scripts/fleet-manifest.sh set-branch "$BESS_FLEET_CONTAINER" <branch>` — the manifest could not know it at dispatch. |
+| 5. TDD | Substance verbatim (RED test first, required test shape); as in CI there is no `superpowers:test-driven-development` skill to invoke, so follow this section's own rules. |
+| 6. Quality gate + code review | Run `./scripts/quality-check.sh` inline, no background agent — one throwaway container, so the cost-discipline reason to background does not apply. The `code-review` plugin is unavailable; Step 11's independent review covers it. Checks 1–3 still apply. |
+| 7. Confirm gate 2 | Same mechanism as Step 3: `gh-agent.sh --as dev`, status `needs_input`, `wait-for-reply.sh`, resume in place. Not CI's "the draft PR is the gate" — there is a live process here that can act on the answer. |
+| 8. Local run & observe | **Applies only on a `--with-compose` dispatch — this is the row that most distinguishes headless from CI, and it is why the socket is opt-in.** CI skips it because a runner structurally cannot; a container *can*, but only when the dispatch was launched with `run-agent.sh --with-compose <n>`. The socket is authority over the podman host, so it is NOT mounted for a plain dispatch (see `scripts/lib/agent-dispatch.sh`); a plain dispatch cannot bring the stack up, so follow CI mode's rule for that step — say in the PR body that Step 8 was not run and why. On a `--with-compose` dispatch, `podman-compose -p <unique-name> -f docker-compose.ci.yml` brings up **sibling** containers, not nested ones (the image has `podman-compose`, not the `docker` CLI). This works because the clone is mounted at its own host path, so the compose file's relative volume paths mean the same directory inside and out. One difference from an interactive run: the siblings publish their ports on the podman host, not in this container's netns, so observe the stack via the allowlisted `host.containers.internal` host (e.g. `curl -s http://host.containers.internal:18180/api/system-health`) rather than `localhost`. Do not write "verification is still owed" in the PR body — do the verification. |
+| 9. Commit + draft PR | Verbatim, including the `CHANGELOG.md` `## [Unreleased]` entry and the documentation check. The PR is authored by the role-scoped `dev` token the container was given, never the maintainer's credential. |
+| 10. Watch this PR to green | Verbatim. `gh pr checks --watch` blocking for an hour is fine here; that is what a long-lived container is for. Never widen to other PRs. |
+| 11. Independent review loop | Verbatim — **unlike CI**, which skips it. Set status `in_review`, invoke `advance-pr`, and let it mark the PR ready on `APPROVED`. This is an interactive-equivalent run the maintainer dispatched deliberately, not a bot grading a PR nobody asked for; the 3-round `CHANGES_REQUESTED` cap is itself a gate, so treat hitting it as Step 3's mechanism (status `escalated`, ask, wait). |
+| 12. Hard constraints | Apply verbatim. On the 3-failed-quality-check bailout, set status `escalated` and post why with `gh-agent.sh --as dev` before waiting — a container that dies silently is indistinguishable from one still working. |
+
 ## Process
 
 ### 0. Resume check — is there prior work for this number?
@@ -271,21 +319,41 @@ next person to do issue work cleans up the last one's mess automatically.
 # looks unmerged forever. PR state is the only authoritative signal.
 merged=$(gh pr list --state merged --limit 200 --json headRefName -q '.[].headRefName')
 git worktree list | awk 'NR>1 {print $1}' | while read -r wt; do
+  # Directory gone = PHANTOM (`prunable`), not detached. `git -C` would fail
+  # and the detached guard below would silently swallow it.
+  [ -d "$wt" ] || { echo "PHANTOM (needs unsandboxed prune): $wt"; continue; }
   b=$(git -C "$wt" branch --show-current 2>/dev/null)
   [ -n "$b" ] || continue                                   # detached: leave alone
   echo "$merged" | grep -qx "$b" || continue                # not merged: leave alone
-  if [ -n "$(git -C "$wt" status --porcelain -uno)" ]; then # tracked edits: never auto-delete
-    echo "KEEP (uncommitted changes): $wt"; continue
+  dirty=$(git -C "$wt" status --porcelain -uno)
+  if [ -n "$dirty" ]; then                                  # tracked edits: never auto-delete
+    if [ -z "$(printf '%s\n' "$dirty" | grep -v '^ D ')" ]; then
+      echo "CARCASS (failed prune, deletions only): $wt"    # see below -- not real edits
+    else
+      echo "KEEP (uncommitted changes): $wt"
+    fi
+    continue
   fi
-  git worktree remove "$wt" && git branch -D "$b"
+  echo "PRUNE: $wt  ($b)"                                   # report; do NOT remove here
 done
 git fetch origin --prune
 ```
 
-Two guards that matter: never remove a worktree with **uncommitted tracked
+**Report the `PRUNE` list; do not act on it from here.** `git worktree remove`
+is sandbox-denied — it deletes the working tree *first* and then fails on the
+`.git/worktrees/<name>` unlink, destroying ~393 tracked files and leaving a
+carcass that no later prune can clear (`git worktree prune` is denied too).
+Emit one `!`-prefixed command covering every `PRUNE`, `CARCASS` and `PHANTOM`
+for the maintainer to paste, exactly as `sweep-prs` Step 3 does. See
+`docs/agents/local-agent-environment.md`, "git worktree remove is denied too".
+
+Three guards that matter: never remove a worktree with **uncommitted tracked
 changes** — report it and let a human decide (one such worktree held a
-375-line module that existed nowhere else) — and never touch a **detached or
-locked** worktree, which is usually another agent's live session.
+375-line module that existed nowhere else); never touch a **detached or
+locked** worktree, which is usually another agent's live session; and never
+mistake a **carcass** for either. A dirty set that is *entirely* ` D` lines is
+this bug's own wreckage, not someone's work — 13 of them accumulated before
+anyone read the diff.
 
 Then `git fetch origin main` — `using-git-worktrees`' git fallback branches
 from the current local `HEAD`, not `origin/main`, so a stale local checkout
@@ -699,10 +767,26 @@ net is upstream, not this section.
    something's wrong.
 
 2. Remove the worktree — via `ExitWorktree action=remove discard_changes=true`
-   if the session is still in it, or `git worktree remove <path>` from the
-   main repo root for a `.worktrees/`-created one.
+   if the session is still in it. That is the harness doing it, so it is not
+   sandboxed and it works.
 
-3. Force-delete the local branch and prune stale remote refs:
+   If the session has already left, **emit one `!`-prefixed command that
+   removes the worktree and force-deletes the branch together**, in that
+   order — the branch delete has to ride the same deferred command: git
+   refuses `git branch -D` while the worktree registration persists, and the
+   command below is what clears the registration:
+
+   ```bash
+   # Emit this; do not execute it. It must run unsandboxed.
+   git worktree remove --force <path> && git branch -D <branch-name>
+   ```
+
+   Running `git worktree remove` from a sandboxed Bash half-deletes the
+   worktree and then fails (see Step 4), so the agent must not run it either.
+
+3. In-session only — when item 2 completed via `ExitWorktree`, the
+   registration is gone and `git branch -D` is safe. Force-delete the local
+   branch and prune stale remote refs:
 
    ```bash
    git branch -D <branch-name>

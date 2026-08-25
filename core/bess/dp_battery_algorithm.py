@@ -63,6 +63,7 @@ import numpy as np
 
 from core.bess.dp_constants import (
     POWER_STEP_KW,
+    SHADOW_PRICE_NOISE_REL,
     SOE_STEP_KWH,
 )
 from core.bess.execution_model import (
@@ -82,6 +83,7 @@ from core.bess.settings import BatterySettings, HomeSettings
 from core.bess.strategic_intent import (
     create_decision_data,
 )
+from core.bess.terminal_value import TerminalValueCurve
 
 # Configure logging
 logging.basicConfig(
@@ -949,14 +951,26 @@ def _record_marginal_value(
     the battery is not in -- so the reported slope stepped mid-cell instead of
     at cell boundaries, and the gate reads that number raw. It now reads the
     interpolant like every other consumer.
+
+    #683 then widened *how much* of the interpolant it reads: one cell is a poor
+    estimate of a staircase, so the price is taken across the whole span a
+    delivery consumes (`_value_of_delivering_below`). That reading is per kWh
+    delivered, which is why the comparison below carries no efficiency factor.
     """
-    shadow_price = _value_slope_below(V[t], soe, battery_settings)
+    shadow_price = _value_of_delivering_below(V[t], soe, battery_settings)
     if shadow_price is None:
         return
 
     decision.shadow_price = shadow_price
+    # At economic indifference the gate OPENS. The direction is not arbitrary:
+    # when covering load from the battery and importing it are worth the same to
+    # the model, P2's row 3 prefers load-tracking discharge, and P7's argument is
+    # that a load-following cover absorbs forecast error where an import does
+    # not. That is what the `>=` already intends; only differencing noise defeats
+    # it, so the comparison is made against that noise rather than against zero
+    # (#602 -- see SHADOW_PRICE_NOISE_REL for why these ties became structural).
     decision.intra_period_discharge_allowed = bool(
-        buy_price_t * battery_settings.efficiency_discharge >= shadow_price
+        buy_price_t >= shadow_price - abs(shadow_price) * SHADOW_PRICE_NOISE_REL
     )
 
 
@@ -1206,7 +1220,7 @@ def _run_dynamic_programming(
     solar_production: list[float] | None = None,
     initial_soe: float | None = None,
     initial_cost_basis: float = 0.0,
-    terminal_value_per_kwh: float = 0.0,
+    terminal_curve: TerminalValueCurve | None = None,
     currency: str = "SEK",
     max_charge_power_per_period: list[float] | None = None,
     import_cap_kwh: float | None = None,
@@ -1260,10 +1274,9 @@ def _run_dynamic_programming(
     V = np.zeros((horizon + 1, len(soe_levels)))
 
     # Terminal value: assign value to usable energy remaining at end of horizon
-    if terminal_value_per_kwh > 0.0:
+    if terminal_curve is not None:
         for i, soe in enumerate(soe_levels):
-            usable_energy = soe - battery_settings.min_soe_kwh
-            V[horizon, i] = max(0.0, usable_energy) * terminal_value_per_kwh
+            V[horizon, i] = terminal_curve.value(soe - battery_settings.min_soe_kwh)
 
     min_soe_kwh = battery_settings.min_soe_kwh
     max_soe_kwh = battery_settings.max_soe_kwh
@@ -1549,7 +1562,7 @@ def _snapped_grid_index(soe: float, battery_settings: BatterySettings) -> float:
 
 def has_value_cell_below(soe: float, battery_settings: BatterySettings) -> bool:
     """Whether a value-function cell exists below `soe` -- i.e. whether
-    `_value_slope_below` can price the last kWh below this state at all.
+    `_value_of_delivering_below` can price the last kWh below this state at all.
 
     Exposed because tests need to select exactly the periods where the shadow
     price is (or is not) computable. Re-deriving that rule test-side is what
@@ -1559,32 +1572,51 @@ def has_value_cell_below(soe: float, battery_settings: BatterySettings) -> bool:
     return _snapped_grid_index(soe, battery_settings) > 0.0
 
 
-def _value_slope_below(
+def _value_of_delivering_below(
     V_row: np.ndarray, soe: float, battery_settings: BatterySettings
 ) -> float | None:
-    """Left one-sided dV/dSoE at a continuous SoE -- the value of the last kWh
-    below this state, priced on the same piecewise-linear interpolant
-    `_interpolate_value` walks. `None` when no cell below exists.
+    """Value given up per kWh **delivered** by discharging from this state.
 
-    Left-sided, because the only consumer authorizes energy *leaving* the
-    battery (#526): what it must price is the value given up going down, not
-    the value gained going up. That makes it the mirror of `_local_value_slope`,
-    which is right-sided because the tie detector wants a noise magnitude.
+    This replaced a one-cell backward difference, which answered in a different
+    unit (per kWh of *SoE*) and, in the discharge-limited regime, answered even
+    that inaccurately -- the latter being the actual #683 defect. The old rule
+    `buy * eta >= dV/dSoE` was itself dimensionally sound; what it could not
+    survive was a bad reading of `dV/dSoE`. `SOE_STEP_KWH` equals
+    `POWER_STEP_KW * dt`, while converting SoE into delivery carries
+    `efficiency_discharge`. So V is a staircase whose riser is one whole delivery
+    step and which is flat once every `1/(1-eta)` cells: a one-cell backward
+    difference lands on a riser 19 times out of 20 and reports the *undiscounted*
+    price, and on the flat cell reports zero.
 
-    Strictly inside a cell the two agree; they diverge only exactly on a grid
-    point, where this reads the cell below and `_local_value_slope` the one
-    above. In practice that case is rarer than it looks: SoC arrives as whole
-    percent, and those SoEs land a hair *below* their nominal index in binary
-    (66% of 15.0 kWh -> 323.99999999999994), so both fall in the same cell.
-    Both stay on the interpolant -- which is the property #571 was about
-    (see `_record_marginal_value`).
+    Pricing the delivery instead removes the artifact rather than compensating for
+    it. Delivering `SOE_STEP_KWH` costs `SOE_STEP_KWH / eta` of SoE, which spans
+    1/eta cells -- just over one -- so the interpolant is read across exactly the
+    span the discharge consumes, and the staircase averages out by construction
+    instead of 19 times in 20.
+
+    That averaging does not hold in the bottom cell. For a grid index below `1/eta`,
+    `soe - SOE_STEP_KWH/eta` falls under `min_soe_kwh`, where `_interpolate_value`
+    extrapolates on the `V[0]->V[1]` gradient (#336); the result then collapses
+    algebraically to that one cell's slope divided by eta, with no averaging. This is
+    not a regression -- it is exactly what the previous estimator returned there, and
+    the rule change compensates for it identically (`buy >= g/eta` is `buy*eta >= g`)
+    -- but it does mean a flat bottom cell still prices at 0.0 and opens the gate. The
+    `None` guard above only covers index 0 itself (#526).
+
+    The result is denominated per delivered kWh, the same unit as `buy_price`, so
+    the gate's comparison needs no efficiency factor: covering `dE` now consumes
+    `dE/eta` of SoE, which would later have delivered `dE` anyway, so the
+    opportunity cost is `dE * p_future` and eta cancels on both sides.
+
+    `None` when no cell below exists -- absence is not permission (#526).
     """
-    idx = _snapped_grid_index(soe, battery_settings)
-
     if not has_value_cell_below(soe, battery_settings) or len(V_row) < 2:
         return None
-    lo = int(np.ceil(min(idx, len(V_row) - 1))) - 1
-    return float((V_row[lo + 1] - V_row[lo]) / SOE_STEP_KWH)
+
+    soe_consumed = SOE_STEP_KWH / battery_settings.efficiency_discharge
+    value_here = _interpolate_value(V_row, soe, battery_settings)
+    value_below = _interpolate_value(V_row, soe - soe_consumed, battery_settings)
+    return float((value_here - value_below) / SOE_STEP_KWH)
 
 
 def _best_action_at_continuous_state(
@@ -1923,7 +1955,7 @@ def optimize_battery_schedule(
     initial_soe: float | None = None,
     initial_cost_basis: float | None = None,
     period_duration_hours: float = 0.25,
-    terminal_value_per_kwh: float = 0.0,
+    terminal_curve: TerminalValueCurve | None = None,
     currency: str = "SEK",
     max_charge_power_per_period: list[float] | None = None,
     capabilities: PlatformCapabilities = DEFAULT_CAPABILITIES,
@@ -1944,9 +1976,11 @@ def optimize_battery_schedule(
         initial_soe: Initial battery state of energy (kWh), defaults to min_soe
         initial_cost_basis: Initial cost basis for battery cycling, defaults to cycle_cost
         period_duration_hours: Duration of each period in hours (always 0.25 for quarterly resolution)
-        terminal_value_per_kwh: Value assigned to each kWh of usable energy remaining at
-            end of horizon. Used to prevent end-of-day battery dumping when tomorrow's
-            prices aren't available yet. Defaults to 0.0 (no terminal value).
+        terminal_curve: Concave valuation of usable energy remaining at end of
+            horizon -- the buy-median rate up to the household's pre-dawn need,
+            nothing above it. Prevents end-of-day dumping when tomorrow's prices
+            aren't available yet, without the all-or-nothing midnight SOE a single
+            rate produces (#602). Defaults to None (no terminal value).
         max_charge_power_per_period: Per-period max charge power limits (kW), typically
             from temperature derating. When provided, charging actions exceeding the
             limit for each period are excluded from the optimization. Defaults to None
@@ -2053,7 +2087,7 @@ def optimize_battery_schedule(
         battery_settings=battery_settings,
         initial_cost_basis=initial_cost_basis,
         dt=dt,
-        terminal_value_per_kwh=terminal_value_per_kwh,
+        terminal_curve=terminal_curve,
         currency=currency,
         max_charge_power_per_period=max_charge_power_per_period,
         import_cap_kwh=import_cap_kwh,
@@ -2554,6 +2588,23 @@ def optimize_battery_schedule(
             dt=dt,
             currency=currency,
         ).economic_summary.battery_solar_cost
+
+    # Both sides must also be credited for energy left at the boundary, or the
+    # guardrail judges the DP's plan by a different objective than the DP
+    # optimized against and discards plans that deliberately carry energy past
+    # the horizon (#602). Latent before the concave row: the capped scalar was
+    # small enough that the omission rarely changed the comparison, whereas a
+    # buy-median head rate is roughly twice it. Caught by
+    # `test_tie_detection_synthetic_coverage`, which found the guardrail firing
+    # on a plan that was better once the carry was counted.
+    if terminal_curve is not None:
+        min_soe = battery_settings.min_soe_kwh
+        guardrail_optimized_cost -= terminal_curve.value(
+            hourly_results[-1].energy.battery_soe_end - min_soe
+        )
+        guardrail_idle_cost -= terminal_curve.value(
+            idle_schedule.period_data[-1].energy.battery_soe_end - min_soe
+        )
 
     if guardrail_idle_cost < guardrail_optimized_cost:
         logger.info(

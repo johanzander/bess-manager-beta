@@ -45,7 +45,14 @@ echo "---------------------------"
 
 if PYTEST=$(py_tool pytest); then
     echo "🔸 Running fast tests (use '$PYTEST' directly to include slow algorithm tests)..."
-    if ! "$PYTEST" -m "not slow" --tb=short -q; then
+    if [ "${BESS_HEADLESS_MODE:-0}" = "1" ]; then
+        # test_agent_permissions.py pins the HOST .claude/settings.json profile,
+        # which a dispatched container replaces with container/agent-settings.json
+        # (bypassPermissions by design -- the container is the boundary). The pins
+        # do not apply there, so exclude the file.
+        PYTEST_IGNORE_PERM="--ignore=backend/tests/test_agent_permissions.py"
+    fi
+    if ! "$PYTEST" -m "not slow" --tb=short -q ${PYTEST_IGNORE_PERM:-}; then
         echo "❌ Tests failed"
         ERRORS=$((ERRORS + 1))
     else
@@ -206,16 +213,38 @@ echo "-------------------------------------------"
 # bare failing statement, so a plain heredoc here would skip the ERRORS
 # increment, the checks below it, AND the final summary -- a missing rule would
 # stop the run mid-file with no verdict, which is the opposite of a gate.
-if ! python3 - <<'PY'
+#
+# These assertions validate the repo's committed .claude/settings.json. A
+# dispatched container shadows that file with container/agent-settings.json --
+# bypassPermissions by design, since the container is the boundary -- so the
+# assertions do not apply there. They still run on the host, where they matter.
+if [ "${BESS_HEADLESS_MODE:-0}" = "1" ]; then
+    echo "⏭️  Skipping permission-surface check (headless container mode)"
+elif ! python3 - <<'PY'
 import json, re, sys
 
 # Patterns match the command AS WRITTEN -- prefix globbing, no normalisation.
-# `gh api` is guarded by a BLANKET rule on purpose: the dangerous shapes put
-# their marker at an arbitrary argument position (`gh api <path> -X PUT`,
-# `gh api <path> -f k=v`), which a prefix glob cannot reach. Enumerating them
-# left real holes twice. Narrowing it back to specific forms re-opens the
-# holes, so the check requires the blanket spelling rather than merely "some
-# rule exists".
+#
+# `gh api` USED to be pinned here by spelling: this list demanded the literal
+# `Bash(gh api)` / `Bash(gh api *)` blanket rules, on the grounds that the
+# dangerous shapes put their marker at an arbitrary argument position
+# (`gh api <path> -X PUT`, `gh api <path> -f k=v`) which a prefix glob cannot
+# reach. #657 replaced that blanket with an enumeration of the write flags, to
+# stop `gh api` reads prompting on every call -- and this gate then failed on
+# a clean `origin/main`, because the strings it demanded were gone while the
+# PROPERTY it cared about still held.
+#
+# Pinning a spelling was the wrong assertion. What matters is that a `gh api`
+# WRITE cannot reach `allow`, not which rule stops it -- and that is already
+# asserted below, by command string, in MUST_BE_GUARDED. Those entries survive
+# any future respelling; the literal ones did not.
+#
+# The enumeration's real risk is a write flag nobody listed. That is not
+# hypothetical: `-F, --field` and `-f, --raw-field` (see `gh api --help`) had
+# only their SHORT forms enumerated, so `gh api <path> --field k=v` resolved to
+# `allow` -- a write that never prompted. Both long forms are pinned below now.
+# When adding a `gh api` write flag, add its command string there too, or the
+# next respelling re-opens the same hole silently.
 #
 # `git push` USED to be in that same sentence and no longer is. It was never
 # the glob that made it safe -- the glob was a blunt instrument compensating
@@ -259,7 +288,6 @@ REQUIRED = {
         "Bash(podman machine rm)", "Bash(podman system reset)",
     ],
     "ask": [
-        "Bash(gh api)", "Bash(gh api *)",
         "Bash(gh pr merge*)", "Bash(gh repo edit*)",
         "Bash(gh release create*)", "Bash(gh release edit*)",
         "Bash(gh release delete*)", "Bash(gh release delete-asset*)",
@@ -322,6 +350,28 @@ MUST_BE_GUARDED = [
     # gh reaching GitHub, including the raw API path
     "gh api repos/o/r/pulls/1/merge -X PUT",
     "gh api repos/o/r/releases -f tag_name=v1",
+    # Long forms of the two field flags. Enumerating only `-f`/`-F` left these
+    # reaching `allow`; see the REQUIRED comment above.
+    "gh api repos/o/r/releases --field tag_name=v1",
+    "gh api repos/o/r/releases --raw-field tag_name=v1",
+    "gh api --field tag_name=v1 repos/o/r/releases",
+    "gh api --raw-field tag_name=v1 repos/o/r/releases",
+    # Attached-value spellings. cobra/pflag takes `--flag=value`, `-fvalue`
+    # and `-f=value` as readily as `--flag value`, and a glob ending in
+    # ` --field ` (with a space) cannot reach them -- a write that resolves to
+    # `allow` by the same argument the long-form pins above were added for.
+    "gh api repos/o/r/releases --field=tag_name=v1",
+    "gh api repos/o/r/releases --raw-field=tag_name=v1",
+    "gh api --field=tag_name=v1 repos/o/r/releases",
+    "gh api --raw-field=tag_name=v1 repos/o/r/releases",
+    "gh api repos/o/r/pulls/1/merge --method=PUT",
+    "gh api --method=PUT repos/o/r/pulls/1/merge",
+    "gh api repos/o/r/pulls/1/merge -XPUT",
+    "gh api -XPUT repos/o/r/pulls/1/merge",
+    "gh api repos/o/r/releases -fbody=hi",
+    "gh api -fbody=hi repos/o/r/releases",
+    "gh api repos/o/r/releases -Fbody=hi",
+    "gh api -Fbody=hi repos/o/r/releases",
     "gh pr merge 588 --squash",
     # Publishing a release escapes to GitHub irreversibly. The read-only verbs
     # are exempt (see MUST_NOT_BE_GUARDED) -- the gate pins both directions so

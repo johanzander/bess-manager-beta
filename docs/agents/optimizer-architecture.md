@@ -287,6 +287,46 @@ invariant to how a fixed total splits across them, so no economic margin,
 however small, can rank them and the choice would otherwise fall to float
 ordering. No further exception may be added without amending this section.
 
+**The second exception, and its boundary (#602).**
+`dp_constants.SHADOW_PRICE_NOISE_REL` bands the discharge gate's comparison
+of a buy price against a shadow price. It is amended in rather than added
+silently, per the paragraph above.
+
+Unlike `VALUE_INDISTINGUISHABLE_SEK` this one *does* decide an eligibility
+— which is why it needs stating here rather than hiding behind the existing
+carve-out. What makes it admissible is that it decides eligibility against
+**differencing noise**, not against an economic margin. `shadow_price` is a
+finite difference of the value function, so it carries V's accumulated
+rounding divided by the SoE step; the band is that bound with headroom
+(1e-12 relative), eight orders of magnitude below the ~1e-4 SEK/kWh
+smallest real price difference in any observed market. It cannot change a
+decision that any market could express.
+
+It is *relative* where the other two are absolute, because it bands a
+quantity whose own noise scales with its magnitude — shadow prices run from
+~0.1 to ~2.6 SEK/kWh across the corpus.
+
+The gate's tie direction is stated, not left to the comparison: **at
+indifference the gate opens.** That follows P2 row 3 (load-tracking
+discharge is preferred within a tie) and P7 (a load-following cover absorbs
+forecast error where an import does not), so it is the same preference the
+rest of this document already asserts, applied at the one place that
+compares a price against a slope.
+
+Why it became necessary: the #602 concave terminal row gives V a constant
+slope over the head segment equal to `median(buy_prices)`, and a median is
+by construction an element of the array it is taken over. Every period
+whose buy price attains the horizon median therefore ties against its own
+shadow price to the last bits — deterministically, not occasionally.
+Measured on `realworld_2026_04_22_202249` period 85: buy 2.60425 against
+shadow 2.60425000000005. The pre-#602 formula escaped this only by
+accident, because subtracting `cycle_cost` detuned the rate off the price
+array.
+
+A PR widening this band, making it absolute, reusing it outside the
+shadow-price comparison, or adding a fourth band fails the compliance
+check below.
+
 ### P6. Exactness claims are certified or bounded
 
 A solver output spliced over another solver's output (the #450 PWL path)
@@ -316,6 +356,41 @@ relax P6 and is not the cost-gate: every spliced half carries the same
 certification a whole window would have. It is the one exception that may be
 caught, and only to re-size the work — catching it to keep the grid DP's
 result, or to splice the uncertified table, remains forbidden.
+
+**A budget that is not denominated in what it spends is not a budget (#697).**
+The paragraph above used to say the exactly-solvable horizon is ~8 periods.
+That was wrong about the binding constraint, and the error was expensive: the
+real limit was transient memory in the objective evaluation, and it bit at
+*five* periods — measured 1.1 GB RSS on the corpus's own bisected half —
+inside the range the doc treated as safe. `_pwl_candidate_values_at` built a
+dense `|X| × |actions|` matrix in one allocation, `|actions|` is ~102 for every
+battery (the discharge lattice is `max_discharge_power_kw / 100`, so hardware
+size does not enter), and the two budgets that existed both looked at the
+wrong thing: `PWL_MAX_PREIMAGE_SEED_POINTS` counted seed *abscissae* (8 MB)
+rather than the ~10 GB of evaluation they imply, and `PWL_MAX_BREAKPOINTS` was
+checked *after* the evaluation it bounds and against the *pruned* row, an
+order of magnitude smaller than what had just been allocated. So the kernel
+OOM-killed the add-on instead, eleven times, and Supervisor's backoff turned a
+deterministic solver bug into a 38-hour outage.
+
+Two rules follow, and they are general, not incidental to this bug:
+
+- **Bound the resource where it is actually spent, in its own units.** The
+  objective is evaluated in fixed-size row blocks (`PWL_EVAL_BLOCK_CELLS`), so
+  peak memory is independent of `|X|`. Blocking is exact — every reduction is
+  over the action axis, so rows are independent and the blocked result is
+  bitwise identical — which is why this bounds cost without touching P6.
+- **A ceiling checked after the allocation it bounds is not a ceiling.**
+  `PWL_MAX_EVAL_CELLS` is checked before the evaluation, in cells, and raising
+  it feeds the bisection above like any other budget.
+
+Note the failure mode this leaves closed: an optimizer that exceeds a budget
+raises and gets re-sized, but an optimizer that is SIGKILLed cannot raise at
+all, so **no in-process safety net can cover unbounded allocation**. The DP
+shares the uvicorn process with the control loop, so bounding the allocation
+is the only thing standing between a solver pathology and the battery going
+unmanaged. Isolating the optimizer so that exhaustion surfaces as a catchable
+`MemoryError` is tracked separately (#698).
 
 ### P7. Point forecasts stay; risk handling is structural, not stochastic
 
@@ -350,11 +425,17 @@ A PR touching the files in the header fails review if it:
    action (P4).
 4. Applies a sensor-noise heuristic to planned or simulated flows (P4).
 5. Hand-picks a SEK tie margin instead of consuming `epsilon_for_period`
-   (P5). The sole permitted exception is
+   (P5). Two exceptions are permitted, both bounded in P5:
    `tie_policy.VALUE_INDISTINGUISHABLE_SEK`, which decides no eligibility
-   and applies only within an eligible set already fixed by epsilon — see
-   P5 for its boundary. A PR widening it, reusing it for eligibility, or
-   adding a third band fails this check.
+   and applies only within an eligible set already fixed by epsilon; and
+   `dp_constants.SHADOW_PRICE_NOISE_REL`, which bands the discharge gate
+   against value-function differencing noise and nothing else. A PR
+   widening either, reusing them elsewhere, or adding a fourth band fails
+   this check.
 6. Adds reward shaping that flattens the objective without the matching
-   preference-table row (P2).
+   preference-table row (P2). The #602 terminal row flattens V over its
+   head segment; its matching statement is P5's stated gate direction
+   (at indifference the gate opens), not a new table row, because the
+   plateau it creates is compared against a *price* outside the selector
+   rather than against another candidate inside it.
 7. Adds per-period uncertainty modeling without field evidence (P7).

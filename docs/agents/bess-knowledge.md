@@ -86,15 +86,51 @@ holds regardless of where that boundary currently sits, since no provider
 ever supplies data past midnight-tomorrow either. Each leftover kWh at the
 horizon's end is valued at:
 
-    terminal_value = median(buy_prices) * efficiency_discharge - cycle_cost
+    value(u) = head_rate * min(u, knee_kwh) + tail_rate * max(0, u - knee_kwh)
 
-where `buy_prices` is the median over the full remaining horizon, capped at
-`max(sell_prices) * efficiency_discharge - cycle_cost` — an
-**arbitrage-consistency cap** that prevents the estimate from exceeding what
-could actually be realized by selling at the best available price
+a **concave** row, not a single rate (#602). `knee_kwh` is the household's own
+net load from the boundary until tomorrow's PV covers it, so the *quantity*
+carried is set by a load profile rather than by a price estimate;
+`head_rate` is `median(buy_prices) * efficiency_discharge` — the purchase the
+household avoids by having carried the energy. `tail_rate` is
+`min(sell_prices) * efficiency_discharge` (the terminal day's window), since
+energy beyond the knee is refilled by tomorrow's sun and is worth only what
+exporting it earns; on a **fixed export tariff** `min` and `max` coincide, so
+the floor would land exactly on the hold-versus-export tie and `tail_rate` is
+0.0 there instead, matching #359's existing carve-out.
+
+`head_rate` is deliberately **not** floored at
+`max(sell_prices) * efficiency_discharge`. That was tried and reverted: it
+prices terminal energy above what the DP can buy at inside the horizon, which
+turns the terminal row into an arbitrage target — on `synthetic_seasonal_spring`
+(median buy 1.05, best sell 1.90) the floored rate of 1.805 made the DP charge
+40.6 kWh to bank 23.6 against a 42.64 SEK credit, which is #126/#244's
+fictitious bonus at scale. The consequence of not flooring is that the rate
+still decides *whether* to carry while the knee decides *how much* — a ~12%
+move in the rate swings the full knee on #595's fixture. That is a known
+limitation, not an oversight.
+
+Before #602 this was one unbounded slope,
+`median(buy_prices) * efficiency_discharge - cycle_cost` capped at
+`max(sell_prices) * efficiency_discharge - cycle_cost`. That shape made midnight
+SOE all-or-nothing: the DP compares the slope against the best in-horizon export
+value, so every kWh was worth holding or none were. The `cycle_cost` deduction
+also double-billed wear, which is charged on charging only. **Both the deduction
+and the cap are gone** on days where the knee can bind; the quantity bound
+replaces what the cap was doing, and does it better, because terminal energy is
+monetised by self-consumption rather than only by export.
+
+**When the knee cannot bind** — it exceeds usable capacity, i.e. every winter
+day and any overcast one — the pre-#602 capped scalar above is still used
+verbatim. Without PV to refill the pack there is no quantity at which a stored
+kWh stops being worth the buy price, so the row would be straight *and*
+uncapped, which is #126/#244's hoarding bug. #602's evidence covers only the
+knee-bounded regime; #381's winter carry needs a knee derived from the next
+cheap charging window and is not yet addressed.
+
 (the formula lives in `core/bess/terminal_value.py`, called by
-`BatterySystemManager._calculate_terminal_value`, which owns fetching its
-inputs and logging the result; see issues #126/#244/#246/#345/#422). The same
+`BatterySystemManager._calculate_terminal_curve`, which owns fetching its
+inputs and logging the result; see issues #126/#244/#246/#345/#422/#602). The same
 function is what the forecast-robustness harness and the pinned scenario
 corpus price the boundary with, so all three optimize against one objective.
 This is the mechanism to check first for
@@ -174,9 +210,12 @@ accounting anywhere in the code.
 **All-IDLE safety net (not a profit threshold)**: After optimization, an
 all-IDLE schedule is unconditionally computed and swapped in only if its
 `battery_solar_cost` is cheaper than the optimized schedule's
-(`core/bess/dp_battery_algorithm.py:1514-1536`). This is a plain cost
-comparison — there is **no minimum-profit threshold and no day-fraction
-scaling**. An earlier design had a threshold/guardrail here; it was removed
+(`core/bess/dp_battery_algorithm.py`). Both sides of that comparison are first
+credited for energy left at the boundary using the same terminal row the DP
+optimized against (#602) — without it the net judges a plan that deliberately
+carries energy by an objective that ignores the carry, and discards it. It
+remains a plain cost comparison — there is **no minimum-profit threshold and no
+day-fraction scaling**. An earlier design had a threshold/guardrail here; it was removed
 in the "Bellman-optimality guardrail removal" refactor (commit
 `ee24537f`/`f57d4fed`,
 `docs/superpowers/specs/2026-07-06-dp-bellman-guardrail-removal-design.md`)
@@ -209,8 +248,12 @@ alternative for that same slot** — never by its gross value, and never against
 "do nothing = 0".
 
 The opportunity cost of a stored kWh is its **forward-looking `shadow_price`** (the
-DP's value-to-go slope), floored by `sell_price` when upcoming solar will replenish
-the battery for free. It is **not** the sunk `cost_basis`, and **not** zero.
+DP's value-to-go, priced per kWh **delivered** since #683), floored by
+`sell_price / discharge_efficiency` when upcoming solar will replenish the battery
+for free. Mind that denominator: `shadow_price` is directly comparable to
+`buy_price`, but sits a factor `1/η` above `sell_price`, so comparing it to a raw
+`sell_price` makes every export look like a 5.3% loss. It is **not** the sunk
+`cost_basis`, and **not** zero.
 
 Operational forms of the one law:
 
@@ -340,9 +383,12 @@ decided per period from the **shadow price** (above):
 
 > Cover the dip from the battery only when the stored energy is worth *less*
 > than buying that energy from the grid right now:
-> **`buy_price × discharge_efficiency ≥ shadow_price` → rate 100, else rate 0`.**
-> (The efficiency factor applies only to the buy side — the shadow price is
-> already per-kWh-of-stored-energy.)
+> **`buy_price ≥ shadow_price` → rate 100, else rate 0`.**
+> No efficiency factor appears (#683): `shadow_price` is denominated per kWh
+> **delivered**, the same unit as `buy_price`. Covering `ΔE` from the battery
+> consumes `ΔE/η` of stored energy, which would later have delivered `ΔE`
+> anyway, so the opportunity cost is `ΔE × p_future` and `η` cancels on both
+> sides.
 
 **Where that comparison happens (#526).** It is made *inside the DP*, in
 `_record_marginal_value`, at the point where the value function `V` is still in
@@ -351,8 +397,8 @@ hand — not downstream in `battery_system_manager.py`. The result is recorded a
 consumer (the BSM apply path and the inverter simulator) reads that boolean
 rather than re-deriving the comparison.
 
-The reason is that `shadow_price` is a *one-sided slope* of the value function
-below the current state, so it does not exist at the bottom level — and a SoE at
+The reason is that `shadow_price` is read from the value function *below* the
+current state, so it does not exist at the bottom level — and a SoE at
 or below the reserve floor clamps there. The DP used to skip the assignment in
 that case, leaving the field at its `0.0` default, which is also what a
 genuinely worthless kWh produces. Any consumer comparing against the scalar
@@ -362,13 +408,13 @@ had computed. **`shadow_price` is now reporting-only; do not derive a decision
 from it.** Where no shadow price is computable there is no removable kWh below
 that state, so the authorization is `False`: absence is not permission.
 
-**How that slope is read (#571).** `_record_marginal_value` calls
-`_value_slope_below`, which returns the **left** one-sided derivative of the
-same piecewise-linear interpolant the policy walks (`_interpolate_value`) —
-left-sided because the gate authorizes energy *leaving* the battery, so what it
-must price is the value given up going down. It is deliberately not
-`_local_value_slope`, the right-sided reading the tie detector (#450) uses for a
-noise magnitude; swapping the two systematically over-opens the gate.
+**How that price is read (#571, #683).** `_record_marginal_value` calls
+`_value_of_delivering_below`, which reads the same piecewise-linear interpolant
+the policy walks (`_interpolate_value`) **downwards** — downwards because the
+gate authorizes energy *leaving* the battery, so what it must price is the value
+given up going down. It is deliberately not `_local_value_slope`, the right-sided
+reading the tie detector (#450) uses for a noise magnitude; swapping the two
+systematically over-opens the gate.
 
 Until #571 this function did its own index arithmetic, snapping to the *nearest*
 grid point with `round()` while the interpolant floors. A state in the lower
@@ -380,10 +426,45 @@ holding while its neighbours discharge. Measured effect of the fix on the
 fixture corpus: 142 of 2168 gate decisions flipped, 141 of them opening a gate
 that had been wrongly closed, with no change to planned energy or cost.
 
+**Why one cell was the wrong span (#683).** Note first what was *not* wrong: the
+old `buy_price × discharge_efficiency ≥ shadow_price` was dimensionally sound.
+Covering `ΔE` consumes `ΔE/η` of stored energy, so `ΔE × buy ≥ (ΔE/η) × dV/dSoE`
+reduces to exactly that test. #683 is filed as a units mismatch; it is not one,
+and where `V` is smooth the new rule is algebraically identical to the old.
+
+What was wrong is **estimation**. Even after #571 the reading was a *one-cell*
+backward difference, and that cannot price this value function accurately. `SOE_STEP_KWH` (0.025) equals `POWER_STEP_KW × dt`, while converting
+stored energy into delivered energy carries `η`. `V` is therefore a staircase
+whose riser is one whole delivery step and which is flat once every `1/(1-η)`
+cells, so a one-cell difference lands on a riser most of the time and reports the
+*undiscounted* price — and on a flat cell reports far too little. `_value_of_delivering_below` prices the **delivery**
+instead: delivering `SOE_STEP_KWH` costs `SOE_STEP_KWH/η` of stored energy, so the
+interpolant is read across exactly the span the discharge consumes and the
+staircase averages out by construction. The result is per delivered kWh, which is
+why the rule above *loses* its `η` rather than gaining one.
+
+Measured effect on the fixture corpus (2508 periods, 39 fixtures): planned
+actions, intents and SoE trajectory **bit-identical everywhere** and cost delta
+exactly zero — the gate is intra-period hardware authorization, which the DP's
+cost model does not simulate. 122 gate decisions flipped (4.9%): **100 closing
+and 22 opening.** The dominant correction runs *opposite* to the issue's original
+"5.3% too strict" framing, because the one-cell difference was noisy in both
+directions rather than η-biased — in 111 rule disagreements the old price
+was 1.5–2.9× too *low*, authorizing discharge of energy worth well above the grid
+price being paid. Against a 20-step reference price the median error falls from
+6.7% to 2.7%. Where `V` is smooth the new reading is exactly `old/η` and the
+decision is unchanged, which is why the median new/old ratio across all periods
+is `1/η`.
+
 What this works out to in practice — important for analysis:
 - During SOLAR_EXPORT the battery is full and exporting surplus, so its marginal
-  kWh is only worth the **export (sell) price** — the surplus refills it for
-  free (replenishment).  The shadow price therefore ≈ the sell price.
+  kWh **of stored energy** is only worth the **export (sell) price** — the
+  surplus refills it for free (replenishment).  Since #683 the reported
+  `shadow_price` is per kWh *delivered*, so it reads ≈ `sell_price ÷
+  discharge_efficiency` (e.g. 0.3158 for a 0.30 sell price at η = 0.95), not
+  ≈ `sell_price`.  This is a change of denomination only: the gate condition
+  in terms of `buy` and `sell` is unchanged, because `buy ≥ sell/η` is the
+  same test as the old `buy × η ≥ sell`.
 - **Normal prices** (`buy > sell`): the gate is **100** — covering the dip from
   the battery beats buying from grid, because solar refills the battery.  This
   is the usual case.
