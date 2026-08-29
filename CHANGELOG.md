@@ -4,6 +4,14 @@ All notable changes to BESS Battery Manager will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [10.1.1b3] - 2026-08-29
+
+### Fixed
+
+- **Huawei inverters can be configured manually** when auto-discovery finds no Huawei integration, and setup now requires the battery Device ID that `huawei_solar.set_tou_periods` targets — completing without one used to leave every schedule write failing. The LUNA2000 working-mode select is now optional, so EMMA-fronted installs that don't expose it can finish setup. ([#120](https://github.com/johanzander/bess-manager/issues/120), [#702](https://github.com/johanzander/bess-manager/pull/702))
+- **Huawei EMMA schedules accept its translated `Time Of Use` working mode** — the working-mode gate matches TOU options case- and separator-insensitively instead of requiring the exact stock `time_of_use_luna2000` label, while still failing loudly on a non-empty option list with no TOU equivalent (e.g. LG RESU). ([#120](https://github.com/johanzander/bess-manager/issues/120), [#702](https://github.com/johanzander/bess-manager/pull/702))
+- **Huawei discharge-stop SOC writes now target the battery discharge cutoff control** (`storage_discharging_cutoff_capacity`) rather than the unrelated grid-charge cutoff; a schema migration clears the stale mapping on existing installs so a wizard re-scan repoints it. ([#120](https://github.com/johanzander/bess-manager/issues/120), [#702](https://github.com/johanzander/bess-manager/pull/702))
+
 ## [10.1.1b2] - 2026-08-29
 
 ### Added
