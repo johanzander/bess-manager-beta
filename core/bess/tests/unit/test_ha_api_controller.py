@@ -11,6 +11,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 import requests
 
+from core.bess.exceptions import SystemConfigurationError
 from core.bess.ha_api_controller import HomeAssistantAPIController
 from core.bess.runtime_failure_tracker import RuntimeFailureTracker
 from core.bess.settings_store import SettingsStore
@@ -1249,3 +1250,127 @@ class TestSensorsLiveView:
         store.data["sensors"] = {"battery_soc": "sensor.battery_soc_v2"}
 
         assert c.sensors == {"battery_soc": "sensor.battery_soc_v2"}
+
+
+class TestConsumptionOverlayBlocksStateGating:
+    """The `blocks` attribute is the data; `state` is incidental.
+
+    The documented template example sets `state` from an `input_boolean`,
+    which reads as the literal string "unknown" if that helper is ever
+    missing or renamed -- even though `blocks` renders just fine. Gating
+    solely on `state` would make that documented example a schedule-stopper.
+    """
+
+    @pytest.fixture
+    def overlay_ctrl(self) -> HomeAssistantAPIController:
+        c = HomeAssistantAPIController(
+            ha_url="http://ha.local:8123",
+            token="test-token",
+            settings_store=_settings_store(
+                {"consumption_overlay": "sensor.bess_consumption_overlay"}
+            ),
+            service_domain="growatt_server",
+        )
+        c.max_attempts = 1
+        c.retry_base_delay = 0
+        c.failure_tracker = RuntimeFailureTracker()
+        return c
+
+    def test_blocks_are_read_even_when_state_is_unknown(
+        self, overlay_ctrl: HomeAssistantAPIController
+    ) -> None:
+        with patch.object(
+            overlay_ctrl,
+            "_api_request",
+            return_value={
+                "state": "unknown",
+                "attributes": {"blocks": []},
+            },
+        ):
+            assert overlay_ctrl.get_consumption_overlay_blocks() == []
+
+    def test_blocks_are_read_even_when_state_is_unavailable(
+        self, overlay_ctrl: HomeAssistantAPIController
+    ) -> None:
+        with patch.object(
+            overlay_ctrl,
+            "_api_request",
+            return_value={
+                "state": "unavailable",
+                "attributes": {"blocks": []},
+            },
+        ):
+            assert overlay_ctrl.get_consumption_overlay_blocks() == []
+
+    def test_missing_blocks_attribute_with_unknown_state_reports_the_state(
+        self, overlay_ctrl: HomeAssistantAPIController
+    ) -> None:
+        from core.bess.exceptions import ConsumptionOverlayError
+
+        with patch.object(
+            overlay_ctrl,
+            "_api_request",
+            return_value={"state": "unknown", "attributes": {}},
+        ):
+            with pytest.raises(ConsumptionOverlayError, match="is unknown"):
+                overlay_ctrl.get_consumption_overlay_blocks()
+
+    def test_missing_blocks_attribute_with_a_real_state_reports_missing_blocks(
+        self, overlay_ctrl: HomeAssistantAPIController
+    ) -> None:
+        from core.bess.exceptions import ConsumptionOverlayError
+
+        with patch.object(
+            overlay_ctrl,
+            "_api_request",
+            return_value={"state": "ok", "attributes": {}},
+        ):
+            with pytest.raises(ConsumptionOverlayError, match="no 'blocks'"):
+                overlay_ctrl.get_consumption_overlay_blocks()
+
+
+class TestGetDeviceMaps:
+    """The registry maps feed banner grouping. A registry query failure must
+    surface as an explicit ``SystemConfigurationError`` (the banner call site
+    decides how to degrade), and successful queries build both maps and cache
+    them for the TTL."""
+
+    def test_raises_on_registry_query_failure(
+        self, ctrl: HomeAssistantAPIController, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        ws = MagicMock()
+        ws.side_effect = RuntimeError("auth failed")
+        monkeypatch.setattr(ctrl, "_ws_query", ws)
+        with pytest.raises(SystemConfigurationError, match="device/entity registries"):
+            ctrl.get_device_maps()
+
+    def test_builds_maps_from_registries(
+        self, ctrl: HomeAssistantAPIController, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        ws = MagicMock()
+        ws.return_value = [
+            [
+                {"entity_id": "sensor.a", "device_id": "dev-1"},
+                {"entity_id": "sensor.b", "device_id": "dev-1"},
+                {"entity_id": "sensor.unmapped"},
+            ],
+            [
+                {"id": "dev-1", "name": "Power Inverter"},
+                {"id": "dev-2"},
+            ],
+        ]
+        monkeypatch.setattr(ctrl, "_ws_query", ws)
+        entity_to_device, device_names = ctrl.get_device_maps()
+        assert entity_to_device == {"sensor.a": "dev-1", "sensor.b": "dev-1"}
+        assert device_names == {"dev-1": "Power Inverter", "dev-2": "dev-2"}
+
+    def test_caches_maps_within_ttl(
+        self, ctrl: HomeAssistantAPIController, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        ws = MagicMock()
+        ws.return_value = [[], []]
+        monkeypatch.setattr(ctrl, "_ws_query", ws)
+        first = ctrl.get_device_maps()
+        second = ctrl.get_device_maps()
+        assert ws.call_count == 1
+        assert second is first

@@ -4,6 +4,18 @@ All notable changes to BESS Battery Manager will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [10.1.1b2] - 2026-08-29
+
+### Added
+
+- **Tell BESS what consumption is coming with Planned Consumption Changes** — declare an EV session or a skipped pool pump in a template sensor, and it applies on top of whichever consumption forecast you already use. ([#428](https://github.com/johanzander/bess-manager/issues/428))
+- **Managed Loads — exclude a regular habit like EV charging from the `ha_statistics` baseline** — name the load's own cumulative energy sensor and BESS learns your normal usage without it, so you can announce it separately via Planned Consumption Changes. ([#706](https://github.com/johanzander/bess-manager/issues/706))
+
+### Fixed
+
+- **The daily log no longer balloons to multiple megabytes** — the schedule and optimization tables are now logged only when the battery schedule actually changes, not re-dumped verbatim every 15-minute cycle. ([#701](https://github.com/johanzander/bess-manager/pull/701))
+- **The dashboard banner reports one line per affected device instead of one per component** — a single device outage previously lit up the banner with separate lines for Battery Control, Battery Monitoring and Energy Monitoring (and one recovery line per component afterwards); all now collapse to one device line, with per-sensor detail still on the System Health page. ([#701](https://github.com/johanzander/bess-manager/pull/701))
+
 ## [10.1.1b1] - 2026-08-25
 
 The beta changelog resets here on top of the `v10.1.0` stable release,

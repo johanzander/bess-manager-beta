@@ -13,6 +13,7 @@ from typing import Any, ClassVar
 import requests
 
 from . import time_utils
+from .consumption_overlay import apply_overlay, period_starts_from
 from .daily_view_builder import DailyView, DailyViewBuilder
 from .daily_view_store import DailyViewStore
 from .dp_battery_algorithm import (
@@ -23,20 +24,26 @@ from .dp_battery_algorithm import (
 from .dp_schedule import DPSchedule
 from .entsoe_source import EntsoeSource
 from .exceptions import (
+    ConsumptionOverlayError,
     HAStatisticsUnavailableError,
     HistoricalDataUnavailableError,
+    ManagedLoadsError,
     SystemConfigurationError,
 )
 from .execution_model import PlatformCapabilities, intra_period_discharge_gate
 from .growatt_min_controller import GrowattMinController
 from .growatt_sph_controller import GrowattSphController
 from .ha_api_controller import HomeAssistantAPIController
-from .health_check import describe_failing_checks, run_system_health_checks
+from .health_check import (
+    resolve_component_device,
+    run_system_health_checks,
+)
 from .health_recovery_tracker import HealthRecovery, HealthRecoveryTracker
 from .historical_data_store import HistoricalDataStore
 from .huawei_controller import HuaweiController
 from .influxdb_helper import get_power_sensor_data_batch, is_influxdb_configured
 from .inverter_controller import InverterController
+from .managed_loads import subtract_managed_loads
 from .models import (
     DecisionData,
     EconomicData,
@@ -687,6 +694,15 @@ class BatterySystemManager:
                 logger.error("Failed to optimize battery schedule")
                 return False
 
+            # Capture the full-horizon economic summary before
+            # _create_updated_schedule rescopes result.economic_summary to
+            # today-only in place (see _create_updated_schedule). The DP
+            # results table logs the full extended horizon, so the Summary
+            # block must come from the full-horizon summary, not the
+            # today-scoped one — otherwise table and Summary silently
+            # disagree in the same log block.
+            full_horizon_summary = optimization_result.economic_summary
+
             # Create new schedule
             temp_schedule = self._create_updated_schedule(
                 optimization_period,
@@ -773,7 +789,26 @@ class BatterySystemManager:
                     format_period(current_period),
                 )
 
-            self.log_battery_schedule(current_period)
+            # Log the applied schedule tables and the DP results table only
+            # when the schedule actually changed. On quiet keep cycles both
+            # are byte-identical to what was already logged, and re-dumping
+            # them every 15 minutes is what grew the daily log to 2.3MB.
+            if should_apply:
+                # Reaching here means prices were non-empty (guarded above),
+                # and prices are derived from price_entries — so it is safe.
+                assert price_entries is not None
+                remaining_entries = price_entries[optimization_period:]
+                buy_prices, sell_prices = self._extract_buy_sell_prices(
+                    remaining_entries
+                )
+                print_optimization_results(
+                    optimization_result,
+                    buy_prices,
+                    sell_prices,
+                    economic_summary=full_horizon_summary,
+                )
+                self.log_battery_schedule(current_period)
+
             return True
 
         except Exception as e:
@@ -1186,6 +1221,94 @@ class BatterySystemManager:
             "actual_hours_available": actual_hours,
         }
 
+    def _apply_consumption_overlay(
+        self,
+        consumption_predictions: list[float],
+        period_count: int,
+        prepare_next_day: bool,
+    ) -> list[float]:
+        """Compose the user's declared consumption changes onto the forecast.
+
+        Args:
+            consumption_predictions: The forecast as the configured strategy
+                produced it, already extended to cover the horizon.
+            period_count: Periods in the horizon.
+            prepare_next_day: Whether this horizon starts at tomorrow 00:00
+                rather than today 00:00 — which day index 0 refers to.
+
+        Returns:
+            The composed forecast, or the input unchanged when no overlay
+            entity is configured.
+
+        """
+        try:
+            blocks = self.controller.get_consumption_overlay_blocks()
+        except ConsumptionOverlayError as e:
+            # The error still propagates — no silent fallback. Recording it
+            # first is what puts it on the dashboard: the caller's blanket
+            # handler logs and returns False, which on its own leaves the
+            # schedule frozen at the last good one with no user-visible signal.
+            logger.error("Planned consumption changes are unusable: %s", e)
+            self._runtime_failure_tracker.record_failure_once(
+                category="CONSUMPTION_OVERLAY",
+                operation=(
+                    "Planned consumption changes entity could not be read — "
+                    "optimization is blocked until the template is fixed"
+                ),
+                error=e,
+            )
+            raise
+        self._runtime_failure_tracker.dismiss_by_category("CONSUMPTION_OVERLAY")
+
+        if not blocks:
+            # Nothing declared today. Dismiss any stale clamp warning first —
+            # deleting the offending block is the obvious way a user expects
+            # to clear it, and returning before the dismiss below made that
+            # impossible.
+            self._runtime_failure_tracker.dismiss_by_category(
+                "CONSUMPTION_OVERLAY_CLAMPED"
+            )
+            return consumption_predictions
+
+        first_period = (
+            time_utils.get_period_count(time_utils.today()) if prepare_next_day else 0
+        )
+        period_starts = period_starts_from(
+            time_utils.period_index_to_timestamp(first_period), period_count
+        )
+
+        result = apply_overlay(
+            consumption_predictions[:period_count], period_starts, blocks
+        )
+
+        logger.info(
+            "Applied planned consumption changes: %d entr(y/ies), %.1f kWh net over the horizon",
+            len(blocks),
+            sum(result.values) - sum(consumption_predictions[:period_count]),
+        )
+
+        if result.clamped_periods:
+            logger.warning(
+                "Planned consumption changes subtracted more than the forecast held in "
+                "%d period(s); those were clamped to zero",
+                result.clamped_periods,
+            )
+            self._runtime_failure_tracker.record_failure_once(
+                category="CONSUMPTION_OVERLAY_CLAMPED",
+                operation=(
+                    f"Planned consumption changes clamped {result.clamped_periods} "
+                    f"period(s) to zero — a subtract block removes more "
+                    f"load than the forecast contains"
+                ),
+                error=ValueError("overlay subtraction exceeded base forecast"),
+            )
+        else:
+            self._runtime_failure_tracker.dismiss_by_category(
+                "CONSUMPTION_OVERLAY_CLAMPED"
+            )
+
+        return result.values
+
     def _get_consumption_forecast(self) -> list[float]:
         """Get consumption forecast based on the configured strategy.
 
@@ -1218,7 +1341,7 @@ class BatterySystemManager:
                     "HA_STATISTICS_FALLBACK"
                 )
                 return result
-            except HAStatisticsUnavailableError as e:
+            except (HAStatisticsUnavailableError, ManagedLoadsError) as e:
                 quarterly = self.home_settings.default_hourly / 4.0
                 logger.warning(
                     "HA statistics unavailable (%s), falling back to fixed "
@@ -1310,6 +1433,53 @@ class BatterySystemManager:
 
         return avg_profile
 
+    def _fetch_recorder_change_stats(
+        self, entity_id: str, start_dt: datetime, end_dt: datetime
+    ) -> tuple[str, list[dict]]:
+        """Fetch one entity's raw hourly 'change' statistics for [start_dt, end_dt).
+
+        Shared by the main load-consumption sensor and each managed-load
+        sensor in _fetch_ha_statistics_raw — both are HA Recorder long-term
+        statistics reads with the same discovery fallback.
+
+        Returns:
+            (statistic_id, stats) — stats is the raw HA Recorder list of
+            {"start": ..., "change": ...} entries, or [] if none exist.
+        """
+        if not entity_id.startswith("sensor."):
+            entity_id = f"sensor.{entity_id}"
+
+        # Try direct entity_id first, then discover the correct statistic_id
+        # (external integrations may register statistics under a different ID)
+        statistic_id = entity_id
+        result = self._controller.get_statistics_during_period(
+            statistic_ids=[statistic_id],
+            start_time=start_dt.isoformat(),
+            end_time=end_dt.isoformat(),
+            period="hour",
+            types=["change"],
+        )
+        stats = result.get(statistic_id, [])
+        if not stats:
+            discovered_id = self._controller.find_statistic_id(entity_id)
+            if discovered_id and discovered_id != statistic_id:
+                logger.info(
+                    "Statistic ID for %s is %s (differs from entity_id)",
+                    entity_id,
+                    discovered_id,
+                )
+                statistic_id = discovered_id
+                result = self._controller.get_statistics_during_period(
+                    statistic_ids=[statistic_id],
+                    start_time=start_dt.isoformat(),
+                    end_time=end_dt.isoformat(),
+                    period="hour",
+                    types=["change"],
+                )
+                stats = result.get(statistic_id, [])
+
+        return statistic_id, stats
+
     def _fetch_ha_statistics_raw(self) -> tuple[str, list[dict]]:
         """Resolve the load-consumption statistic_id and fetch its raw 7-day stats.
 
@@ -1317,12 +1487,20 @@ class BatterySystemManager:
         time-of-day profile) and get_ha_statistics_for_debug_export (which
         exports it verbatim for exact-fidelity mock replay).
 
+        If managed_load_sensors is configured, each one's own 7-day stats are
+        fetched the same way and subtracted before returning — the residual
+        is what both callers see, so the debug export stays consistent with
+        what the forecast actually uses (issue #706).
+
         Returns:
             (statistic_id, stats) — stats is the raw HA Recorder
-            list of {"start": ..., "change": ...} entries.
+            list of {"start": ..., "change": ...} entries, residual of any
+            configured managed loads.
 
         Raises:
             HAStatisticsUnavailableError: sensor not configured, or no
+                statistics data available for it in the past 7 days.
+            ManagedLoadsError: a configured managed-load sensor has no
                 statistics data available for it in the past 7 days.
         """
         from datetime import time
@@ -1349,42 +1527,39 @@ class BatterySystemManager:
         start_dt = datetime.combine(start_date, time(0, 0), tzinfo=tz)
         end_dt = datetime.combine(today_date, time(0, 0), tzinfo=tz)
 
-        # Try direct entity_id first, then discover the correct statistic_id
-        # (external integrations may register statistics under a different ID)
-        statistic_id = target_sensor
-        result = self._controller.get_statistics_during_period(
-            statistic_ids=[statistic_id],
-            start_time=start_dt.isoformat(),
-            end_time=end_dt.isoformat(),
-            period="hour",
-            types=["change"],
+        statistic_id, stats = self._fetch_recorder_change_stats(
+            target_sensor, start_dt, end_dt
         )
-
-        stats = result.get(statistic_id, [])
-        if not stats:
-            # Entity_id didn't match — discover the correct statistic_id
-            discovered_id = self._controller.find_statistic_id(target_sensor)
-            if discovered_id and discovered_id != statistic_id:
-                logger.info(
-                    "Statistic ID for %s is %s (differs from entity_id)",
-                    target_sensor,
-                    discovered_id,
-                )
-                statistic_id = discovered_id
-                result = self._controller.get_statistics_during_period(
-                    statistic_ids=[statistic_id],
-                    start_time=start_dt.isoformat(),
-                    end_time=end_dt.isoformat(),
-                    period="hour",
-                    types=["change"],
-                )
-                stats = result.get(statistic_id, [])
-
         if not stats:
             raise HAStatisticsUnavailableError(
                 f"No statistics data returned for {target_sensor} "
                 f"(statistic_id: {statistic_id}) in the past 7 days"
             )
+
+        managed_load_sensors = self.home_settings.managed_load_sensors
+        if managed_load_sensors:
+            managed_stats = []
+            for sensor_entity_id in managed_load_sensors:
+                _, m_stats = self._fetch_recorder_change_stats(
+                    sensor_entity_id, start_dt, end_dt
+                )
+                if not m_stats:
+                    raise ManagedLoadsError(
+                        f"No statistics data returned for managed-load sensor "
+                        f"'{sensor_entity_id}' in the past 7 days"
+                    )
+                managed_stats.append(m_stats)
+
+            stats, clamped_hours = subtract_managed_loads(stats, managed_stats)
+            if clamped_hours:
+                logger.warning(
+                    "Managed-load subtraction clamped %d/%d hours to 0 for %s "
+                    "(a managed load's own historical draw exceeded the total "
+                    "load sensor's for those hours)",
+                    clamped_hours,
+                    len(stats),
+                    target_sensor,
+                )
 
         return statistic_id, stats
 
@@ -1402,7 +1577,7 @@ class BatterySystemManager:
             return None
         try:
             statistic_id, stats = self._fetch_ha_statistics_raw()
-        except HAStatisticsUnavailableError:
+        except (HAStatisticsUnavailableError, ManagedLoadsError):
             return None
         return {"statistic_id": statistic_id, "stats": stats}
 
@@ -1795,11 +1970,10 @@ class BatterySystemManager:
             self.home_settings.consumption_strategy
             in self._DATE_CACHED_CONSUMPTION_STRATEGIES
         ):
-            consumption_predictions_fresh = (
+            if (
                 self._consumption_predictions is not None
                 and self._consumption_predictions_date == time_utils.today()
-            )
-            if consumption_predictions_fresh:
+            ):
                 consumption_predictions = self._consumption_predictions
             else:
                 consumption_predictions = self._get_consumption_forecast()
@@ -1842,6 +2016,16 @@ class BatterySystemManager:
                     len(tomorrow_solar),
                 )
                 solar_predictions = solar_predictions + tomorrow_solar
+
+        # --- Apply the user's planned consumption changes (issue #428) ---
+        # Deliberately here, not inside _get_consumption_forecast: after the
+        # daily prediction cache, so editing the overlay takes effect on the
+        # next run rather than tomorrow; and after the extension above, so a
+        # block declared for tomorrow lands on tomorrow instead of today's
+        # blocks being duplicated onto it.
+        consumption_predictions = self._apply_consumption_overlay(
+            consumption_predictions, period_count, prepare_next_day
+        )
 
         # --- Build data arrays ---
         consumption_data = [0.0] * period_count
@@ -2065,6 +2249,19 @@ class BatterySystemManager:
 
         return derated_limits
 
+    def _extract_buy_sell_prices(
+        self, entries: list[dict[str, Any]]
+    ) -> tuple[list[float], list[float]]:
+        """Split pre-calculated price entries into buy and sell price lists.
+
+        Mirrors the extraction inside ``_run_optimization`` so the apply path
+        can reproduce the DP results table when the schedule changes.
+        """
+        return (
+            [entry["buyPrice"] for entry in entries],
+            [entry["sellPrice"] for entry in entries],
+        )
+
     def _run_optimization(
         self,
         optimization_period: int,
@@ -2116,8 +2313,7 @@ class BatterySystemManager:
             # Get buy and sell prices from pre-calculated price entries
             # This preserves direct sell prices from sources like Octopus Energy
             remaining_entries = price_entries[optimization_period:]
-            buy_prices = [entry["buyPrice"] for entry in remaining_entries]
-            sell_prices = [entry["sellPrice"] for entry in remaining_entries]
+            buy_prices, sell_prices = self._extract_buy_sell_prices(remaining_entries)
 
             # Scope the arbitrage-consistency cap to sell prices on the
             # terminal boundary's own calendar day (#422): on a 48h-extended
@@ -2169,9 +2365,6 @@ class BatterySystemManager:
             self._add_timestamps_to_period_data(
                 result, optimization_period, next_day=prepare_next_day
             )
-
-            # Print results table with strategic intents
-            print_optimization_results(result, buy_prices, sell_prices)
 
             # Store full day data in result for UI
             result.input_data["full_home_consumption"] = optimization_data[
@@ -3237,35 +3430,78 @@ class BatterySystemManager:
     def _update_health_recoveries(
         self, previous_results: dict[str, Any] | None, new_results: dict[str, Any]
     ) -> None:
-        """Detect per-component ERROR/WARNING -> OK transitions and record them.
+        """Detect device-level ERROR/WARNING -> OK transitions and record them.
 
-        A component still in ERROR/WARNING clears any stale pending recovery
-        for itself, since the live banner already covers it.
+        A single underlying device outage fails several health components at
+        once, so recoveries are tracked per device, not per component: one
+        recovery line per recovered device, naming the components that
+        recovered. A device any of whose components still fails clears any
+        stale pending recovery for itself — the live banner already covers
+        that device.
         """
         if not previous_results:
             return
+
+        # Health checks (the caller of this method) already dereference
+        # self._controller, so it is never None here.
+        assert self._controller is not None
+        try:
+            entity_to_device, device_names = self._controller.get_device_maps()
+        except SystemConfigurationError as e:
+            logger.warning(
+                "HA device registry unavailable, grouping recoveries by "
+                "component name: %s",
+                e,
+            )
+            entity_to_device, device_names = {}, {}
 
         previous_components_by_name = {
             component["name"]: component
             for component in previous_results.get("checks", [])
         }
 
+        def _device_of(component: dict) -> str:
+            return resolve_component_device(component, entity_to_device, device_names)
+
+        # Devices with a component still failing: their live banner lines
+        # supersede any pending "recovered" note, which must not linger.
+        failing_devices = {
+            _device_of(component)
+            for component in new_results.get("checks", [])
+            if component.get("status") in ("ERROR", "WARNING")
+        }
+        for device in failing_devices:
+            self._health_recovery_tracker.clear_for_component(device)
+
+        # Components that recovered. Resolve the device from the PREVIOUS
+        # component, which still carries the failing entity_ids — the new OK
+        # component may have empty checks.
+        recovered_by_device: dict[str, list[dict]] = {}
         for component in new_results.get("checks", []):
-            name = component["name"]
-            new_status = component["status"]
-            previous_component = previous_components_by_name.get(name)
+            previous_component = previous_components_by_name.get(component["name"])
             previous_status = (
                 previous_component["status"] if previous_component else None
             )
+            if (
+                previous_component is not None
+                and previous_status in ("ERROR", "WARNING")
+                and component["status"] == "OK"
+            ):
+                device = _device_of(previous_component)
+                recovered_by_device.setdefault(device, []).append(component)
 
-            if previous_status in ("ERROR", "WARNING") and new_status == "OK":
-                self._health_recovery_tracker.record_recovery(
-                    component=name,
-                    previous_status=previous_status,
-                    detail=describe_failing_checks(previous_component),
-                )
-            elif new_status in ("ERROR", "WARNING"):
-                self._health_recovery_tracker.clear_for_component(name)
+        for device, components in recovered_by_device.items():
+            if device in failing_devices:
+                continue
+            previous_statuses = [
+                previous_components_by_name[c["name"]]["status"] for c in components
+            ]
+            worst = "ERROR" if "ERROR" in previous_statuses else "WARNING"
+            self._health_recovery_tracker.record_recovery(
+                component=device,
+                previous_status=worst,
+                detail=", ".join(c["name"] for c in components),
+            )
 
     def get_health_recoveries(self) -> list[HealthRecovery]:
         """Get all pending (unacknowledged) health-check recoveries."""

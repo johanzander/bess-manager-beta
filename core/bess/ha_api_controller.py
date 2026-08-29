@@ -16,8 +16,9 @@ from typing import ClassVar
 import requests
 import websocket
 
+from .consumption_overlay import OverlayBlock, parse_overlay_blocks
 from .energy_balance import derive_load_consumption
-from .exceptions import SystemConfigurationError
+from .exceptions import ConsumptionOverlayError, SystemConfigurationError
 from .runtime_failure_tracker import RuntimeFailureTracker
 from .settings_store import SettingsStore, apply_signed_pair_aliases
 
@@ -141,6 +142,12 @@ class HomeAssistantAPIController:
         # share one signed entity (see get_battery_charge_power/
         # get_battery_discharge_power).
         self.battery_power_polarity = battery_power_polarity or ""
+
+        # Cached entity->device and device->name registry maps for health
+        # banner grouping, refreshed on a TTL so the 5-minute health check
+        # does not re-fetch the full HA registries every run.
+        self._device_maps_cache: tuple | None = None
+        self._device_maps_cache_ts: float | None = None
 
         # Runtime failure tracker (injected by BatterySystemManager)
         self.failure_tracker = None
@@ -285,6 +292,13 @@ class HomeAssistantAPIController:
             "unit": "W",
             "precision": 1,
             "conversion_threshold": 1000,
+        },
+        "get_consumption_overlay_blocks": {
+            "sensor_key": "consumption_overlay",
+            "name": "Planned Consumption Changes",
+            "unit": "list",
+            "precision": None,
+            "conversion_threshold": None,
         },
         # Solar forecast
         "get_solar_forecast": {
@@ -1445,6 +1459,61 @@ class HomeAssistantAPIController:
             return False
         result = self._get_binary_state("discharge_inhibit")
         return result is True
+
+    def get_consumption_overlay_blocks(self) -> list[OverlayBlock]:
+        """Read the user's declared changes to expected consumption (issue #428).
+
+        Returns:
+            The blocks declared on the overlay entity's ``blocks`` attribute,
+            or an empty list when no overlay entity is configured. "No
+            overlay" is a supported configuration, not a degraded one — it is
+            what an install that never sets one up keeps running.
+
+        Raises:
+            ConsumptionOverlayError: If an overlay entity IS configured but
+                its ``blocks`` attribute is absent and the state offers no
+                better explanation, or the blocks it holds are malformed. A
+                user who declared an EV session is better served by an error
+                than by an optimization that quietly ignored it.
+
+        """
+        if not self.sensors.get("consumption_overlay"):
+            return []
+
+        entity_id, _ = self._resolve_entity_id("consumption_overlay")
+        response = self._api_request(
+            "get",
+            f"/api/states/{entity_id}",
+            operation="Read planned consumption changes",
+            category="CONSUMPTION_OVERLAY",
+            context={"entity_id": entity_id},
+        )
+        if not response:
+            raise ConsumptionOverlayError(
+                f"Planned consumption changes entity '{entity_id}' returned no state"
+            )
+
+        # `blocks` is the data; `state` is incidental. A template sensor's
+        # state commonly comes from an unrelated helper (per the docs'
+        # example, an input_boolean) that can itself go "unknown" while
+        # `blocks` still renders correctly -- gating on state alone would
+        # make that documented example a schedule-stopper. Check `blocks`
+        # first, and fall back to reporting the state only when there is no
+        # data to fall back on.
+        attributes = response.get("attributes") or {}
+        if "blocks" in attributes:
+            return parse_overlay_blocks(attributes["blocks"])
+
+        state = response.get("state")
+        if state in ("unavailable", "unknown", None):
+            raise ConsumptionOverlayError(
+                f"Planned consumption changes entity '{entity_id}' is {state}"
+            )
+
+        raise ConsumptionOverlayError(
+            f"Planned consumption changes entity '{entity_id}' has no 'blocks' "
+            f"attribute (found: {sorted(attributes)})"
+        )
 
     def get_estimated_consumption(self):
         """Get estimated consumption in quarterly resolution (96 periods).
@@ -2885,6 +2954,51 @@ class HomeAssistantAPIController:
             return results
         finally:
             ws.close()
+
+    def get_device_maps(self, ttl_seconds: int = 900) -> tuple[dict, dict]:
+        """Return ``entity_id -> device_id`` and ``device_id -> name`` maps.
+
+        Fetches the HA entity and device registries in one WebSocket
+        connection and builds both maps. Results are cached for
+        ``ttl_seconds`` so the 5-minute health check does not re-fetch the
+        full registries every run; the TTL self-heals after a sensor is
+        reconfigured.
+
+        Raises:
+            SystemConfigurationError: If the HA registries cannot be
+                queried — the banner call site decides explicitly whether a
+                registry failure degrades the grouping or surfaces.
+        """
+        now = time.time()
+        if (
+            self._device_maps_cache is not None
+            and now - (self._device_maps_cache_ts or 0) < ttl_seconds
+        ):
+            return self._device_maps_cache
+        try:
+            results = self._ws_query(
+                [
+                    {"type": "config/entity_registry/list"},
+                    {"type": "config/device_registry/list"},
+                ]
+            )
+            entity_to_device = {
+                entry["entity_id"]: entry.get("device_id")
+                for entry in results[0]
+                if entry.get("entity_id") and entry.get("device_id")
+            }
+            device_names = {
+                device["id"]: device.get("name") or device["id"]
+                for device in results[1]
+                if device.get("id")
+            }
+            self._device_maps_cache = (entity_to_device, device_names)
+            self._device_maps_cache_ts = now
+            return self._device_maps_cache
+        except Exception as e:
+            raise SystemConfigurationError(
+                f"Failed to query Home Assistant device/entity registries: {e}"
+            ) from e
 
     def get_statistics_during_period(
         self,
