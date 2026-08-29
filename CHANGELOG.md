@@ -12,6 +12,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - **Huawei EMMA schedules accept its translated `Time Of Use` working mode** — the working-mode gate matches TOU options case- and separator-insensitively instead of requiring the exact stock `time_of_use_luna2000` label, while still failing loudly on a non-empty option list with no TOU equivalent (e.g. LG RESU). ([#120](https://github.com/johanzander/bess-manager/issues/120), [#702](https://github.com/johanzander/bess-manager/pull/702))
 - **Huawei discharge-stop SOC writes now target the battery discharge cutoff control** (`storage_discharging_cutoff_capacity`) rather than the unrelated grid-charge cutoff; a schema migration clears the stale mapping on existing installs so a wizard re-scan repoints it. ([#120](https://github.com/johanzander/bess-manager/issues/120), [#702](https://github.com/johanzander/bess-manager/pull/702))
 
+## [10.1.1b2] - 2026-08-29
+
+### Added
+
+- **Tell BESS what consumption is coming with Planned Consumption Changes** — declare an EV session or a skipped pool pump in a template sensor, and it applies on top of whichever consumption forecast you already use. ([#428](https://github.com/johanzander/bess-manager/issues/428))
+- **Managed Loads — exclude a regular habit like EV charging from the `ha_statistics` baseline** — name the load's own cumulative energy sensor and BESS learns your normal usage without it, so you can announce it separately via Planned Consumption Changes. ([#706](https://github.com/johanzander/bess-manager/issues/706))
+
+### Fixed
+
+- **The daily log no longer balloons to multiple megabytes** — the schedule and optimization tables are now logged only when the battery schedule actually changes, not re-dumped verbatim every 15-minute cycle. ([#701](https://github.com/johanzander/bess-manager/pull/701))
+- **The dashboard banner reports one line per affected device instead of one per component** — a single device outage previously lit up the banner with separate lines for Battery Control, Battery Monitoring and Energy Monitoring (and one recovery line per component afterwards); all now collapse to one device line, with per-sensor detail still on the System Health page. ([#701](https://github.com/johanzander/bess-manager/pull/701))
+
+## [10.1.1b1] - 2026-08-25
+
+The beta changelog resets here on top of the `v10.1.0` stable release,
+previewing the next `10.1.1` patch. This release covers what is genuinely new
+since `v10.1.0`; everything before that shipped in earlier beta releases and in
+stable `v10.1.0`.
+
+### Fixed
+
+- **The add-on no longer runs out of memory and stops restarting when the optimizer refines a near-tied decision** — the exact re-solve now runs within a bounded memory footprint. ([#697](https://github.com/johanzander/bess-manager/issues/697))
+- **The battery now keeps a sensible overnight reserve instead of all-or-nothing** — end-of-horizon energy is valued by how much the house needs before sunrise, so midnight charge no longer flips between empty and full. ([#602](https://github.com/johanzander/bess-manager/issues/602))
+- **Sub-period discharge authorization now values stored energy accurately** — the gate read the battery's marginal value from a single grid cell, which mis-priced it in both directions, so it both held and released the battery in the wrong periods. ([#683](https://github.com/johanzander/bess-manager/issues/683))
+
 ## [10.1.0] - 2026-08-22
 
 ### Added
