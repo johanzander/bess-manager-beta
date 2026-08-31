@@ -4,13 +4,11 @@ All notable changes to BESS Battery Manager will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [10.1.1b4] - 2026-08-31
 
 ### Added
 
-- **Tell BESS what consumption is coming with Planned Consumption Changes** — declare an EV session or a skipped pool pump in a template sensor, and it applies on top of whichever consumption forecast you already use. ([#428](https://github.com/johanzander/bess-manager/issues/428))
 - **Groundwork for VPP load tracking** — adds the opt-in `vpp_load_tracking_enabled` setting (default off) and the energy-budget model behind it; the live tracking loop follows separately. ([#520](https://github.com/johanzander/bess-manager/issues/520))
-- **Managed Loads — exclude a regular habit like EV charging from the `ha_statistics` baseline** — name the load's own cumulative energy sensor and BESS learns your normal usage without it, so you can announce it separately via Planned Consumption Changes. ([#706](https://github.com/johanzander/bess-manager/issues/706))
 
 ### Changed
 
@@ -25,14 +23,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - **A slow or failing electricity-price fetch no longer delays or skips the top-of-hour battery mode switch** — price fetching moved to its own scheduler job off the control path, and the optimizer reads a cache that a dedicated job keeps warm. ([#709](https://github.com/johanzander/bess-manager/issues/709))
 - **The "Strategic Intent" dashboard card no longer overflows when the current period is curtailed** — the "Curtailed (No Export)" note now renders as a small badge under the headline instead of being appended to the large headline text. ([#676](https://github.com/johanzander/bess-manager/issues/676))
 - **Tomorrow's prices no longer get stuck at an inflated value on the HACS Nordpool integration** — before Nordpool publishes next-day prices, BESS now waits for the sensor's `tomorrow_valid` flag instead of trusting a `tomorrow` array that still mirrors today, and it strips VAT from that array like every other price path. ([#704](https://github.com/johanzander/bess-manager/issues/704))
-- **Huawei inverters can be configured manually** when auto-discovery finds no Huawei integration, and setup now requires the battery Device ID that `huawei_solar.set_tou_periods` targets — completing without one used to leave every schedule write failing. The LUNA2000 working-mode select is now optional, so EMMA-fronted installs that don't expose it can finish setup. ([#120](https://github.com/johanzander/bess-manager/issues/120))
-- **Huawei EMMA schedules accept its translated `Time Of Use` working mode** — the working-mode gate matches TOU options case- and separator-insensitively instead of requiring the exact stock `time_of_use_luna2000` label, while still failing loudly on a non-empty option list with no TOU equivalent (e.g. LG RESU). ([#120](https://github.com/johanzander/bess-manager/issues/120))
-- **Huawei discharge-stop SOC writes now target the battery discharge cutoff control** (`storage_discharging_cutoff_capacity`) rather than the unrelated grid-charge cutoff; a schema migration clears the stale mapping on existing installs so a wizard re-scan repoints it. ([#120](https://github.com/johanzander/bess-manager/issues/120))
-- **The add-on no longer runs out of memory and stops restarting when the optimizer refines a near-tied decision** — the exact re-solve now runs within a bounded memory footprint. ([#697](https://github.com/johanzander/bess-manager/issues/697))
-- **The battery now keeps a sensible overnight reserve instead of all-or-nothing** — end-of-horizon energy is valued by how much the house needs before sunrise, so midnight charge no longer flips between empty and full. ([#602](https://github.com/johanzander/bess-manager/issues/602))
-- **Sub-period discharge authorization now values stored energy accurately** — the gate read the battery's marginal value from a single grid cell, which mis-priced it in both directions, so it both held and released the battery in the wrong periods. ([#683](https://github.com/johanzander/bess-manager/issues/683))
-- **The daily log no longer balloons to multiple megabytes** — the schedule and optimization tables are now logged only when the battery schedule actually changes, not re-dumped verbatim every 15-minute cycle. ([#701](https://github.com/johanzander/bess-manager/pull/701))
-- **The dashboard banner reports one line per affected device instead of one per component** — a single device outage previously lit up the banner with separate lines for Battery Control, Battery Monitoring and Energy Monitoring (and one recovery line per component afterwards); all now collapse to one device line, with per-sensor detail still on the System Health page. ([#701](https://github.com/johanzander/bess-manager/pull/701))
+- **The battery no longer drains to empty before midnight and re-imports in the morning when the overnight consumption forecast has an empty hour** — an empty HA-statistics bucket or a managed-load clamp put 0 kWh into an overnight period, which the terminal-value calculation misread as "solar has taken over the house" and collapsed the overnight reserve. ([#715](https://github.com/johanzander/bess-manager/issues/715))
 
 ## [10.1.0] - 2026-08-22
 
