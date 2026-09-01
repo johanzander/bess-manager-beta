@@ -17,6 +17,8 @@ For production configuration, all user-facing values must be properly configured
 from dataclasses import dataclass, field, fields
 from typing import Any
 
+from .vpp_load_tracking import VPP_LOAD_TRACKING_TICK_SECONDS
+
 # Price settings defaults
 DEFAULT_AREA = ""
 MARKUP_RATE = 0.08  # per kWh in configured currency
@@ -131,6 +133,12 @@ class BatterySettings:
     # CT/smart meter and a platform with supports_export_limit_control.
     export_curtailment_enabled: bool = False
     export_curtailment_price_floor: float = 0.0
+    # VPP load tracking (#520) -- opt-in, Growatt VPP control mode only.
+    # Requires a resolvable local load sensor; opting in without one is a
+    # configuration error surfaced in health, never a quiet fall back to
+    # #413's release behaviour. See core/bess/vpp_load_tracking.py.
+    vpp_load_tracking_enabled: bool = False
+    vpp_load_tracking_tick_seconds: int = VPP_LOAD_TRACKING_TICK_SECONDS
     reserved_capacity: float = field(init=False)
     min_soe_kwh: float = field(init=False)
     max_soe_kwh: float = field(init=False)
@@ -202,6 +210,17 @@ class BatterySettings:
         return self
 
 
+# Consumption-strategy ids that have been renamed. The old id is accepted
+# from persisted settings and API payloads and mapped to the current one so
+# existing installs keep working without a settings migration.
+_CONSUMPTION_STRATEGY_ALIASES = {"influxdb_7d_avg": "load_power_7d_avg"}
+
+
+def canonicalize_consumption_strategy(value: str) -> str:
+    """Map a legacy consumption-strategy id to its current name."""
+    return _CONSUMPTION_STRATEGY_ALIASES.get(value, value)
+
+
 @dataclass
 class HomeSettings:
     """Home electrical settings."""
@@ -251,6 +270,8 @@ class HomeSettings:
         for key, value in kwargs.items():
             if key not in valid_fields:
                 raise AttributeError(f"HomeSettings has no attribute '{key}'")
+            if key == "consumption_strategy":
+                value = canonicalize_consumption_strategy(value)
             setattr(self, key, value)
         self.__post_init__()
 
@@ -270,7 +291,9 @@ class HomeSettings:
                 "consumption", HOME_HOURLY_CONSUMPTION_KWH
             )
             self.currency = config["home"].get("currency", DEFAULT_CURRENCY)
-            self.consumption_strategy = home_config.get("consumption_strategy", "fixed")
+            self.consumption_strategy = canonicalize_consumption_strategy(
+                home_config.get("consumption_strategy", "fixed")
+            )
             self.power_monitoring_enabled = home_config["power_monitoring_enabled"]
             self.__post_init__()
         return self

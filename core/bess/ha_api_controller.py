@@ -51,6 +51,39 @@ def run_request(http_method, *args, **kwargs):
         raise
 
 
+def solcast_detailed_hourly_to_quarterly(hourly_data: list) -> list[float]:
+    """Expand a Solcast ``detailedHourly`` payload to 96 quarter-hour values.
+
+    Module-level so that anything replaying a captured forecast -- notably
+    ``scripts/knee_oracle.py``, which scores the #602/#687 terminal knee
+    against metered actuals -- prices the boundary off the *same* parse
+    production used. A second, hand-written copy of this is how an oracle
+    comes to grade a forecast the optimizer never saw: the hour is taken
+    from the raw string with no timezone conversion, so a reimplementation
+    that helpfully calls ``astimezone`` agrees only while the feed happens
+    to serialize in local time, and silently shifts by the UTC offset
+    otherwise.
+
+    Missing hours stay 0.0 rather than raising -- Solcast omits pre-dawn and
+    post-dusk hours, which are genuinely zero.
+    """
+    hourly_values = [0.0] * 24
+    for entry in hourly_data:
+        period_start = entry["period_start"]
+        if isinstance(period_start, str):
+            # Deliberately naive: the hour is whatever the payload says it
+            # is, in the payload's own offset. See the docstring.
+            hour = int(period_start.split("T")[1].split(":")[0])
+        else:
+            hour = period_start.hour
+        hourly_values[hour] = float(entry["pv_estimate"])
+
+    quarterly_values: list[float] = []
+    for hourly_value in hourly_values:
+        quarterly_values.extend([hourly_value / 4.0] * 4)
+    return quarterly_values
+
+
 class HomeAssistantAPIController:
     """A class for interacting with Inverter controls via Home Assistant REST API."""
 
@@ -881,6 +914,9 @@ class HomeAssistantAPIController:
         "solis_modbus_inverter_pv_total_generation": "lifetime_solar_energy",  # :155
         "solis_modbus_inverter_total_energy_imported_from_grid": "lifetime_import_from_grid",  # :871
         "solis_modbus_inverter_total_energy_fed_into_grid": "lifetime_export_to_grid",  # :901
+        # Meter-measured whole-home consumption, registers 33177/33178 (#730).
+        # Enabled by default; needs a grid CT/meter, standard on Solis hybrids.
+        "solis_modbus_inverter_total_energy_consumption": "lifetime_load_consumption",  # :1023
     }
 
     SOLCAST_SUFFIX_MAP: ClassVar[dict[str, str]] = {
@@ -930,6 +966,15 @@ class HomeAssistantAPIController:
         "storage_total_discharge": "lifetime_battery_discharged",
         "grid_exported_energy": "lifetime_export_to_grid",
         "grid_accumulated_energy": "lifetime_import_from_grid",
+        # EMMA-only whole-home consumption counter, register key
+        # total_energy_consumption (#730). Only present on installs with an
+        # EMMA energy manager, and its HA entity is
+        # entity_registry_enabled_default=False (sensor.py EMMA_SENSOR_DESCRIPTIONS)
+        # — so unlike emma_tou_periods below it is safe to map here: an
+        # optional lifetime sensor left disabled is surfaced by
+        # _map_registry_entities' #549 disabled-bucket (the wizard prompts the
+        # user to enable it), not read at startup.
+        "total_energy_consumption": "lifetime_load_consumption",
         "input_power": "pv_power",
         "power_meter_active_power": "import_power",
         # TOU period readback (#431). The integration publishes the configured
@@ -2622,31 +2667,7 @@ class HomeAssistantAPIController:
                 f"No hourly data found in solar forecast sensor {entity_id}"
             )
 
-        # Parse hourly values from Solcast
-        hourly_values = [0.0] * 24
-        pv_field = "pv_estimate"
-
-        for entry in hourly_data:
-            # Handle period_start
-            period_start = entry["period_start"]
-
-            # If period_start is a string, parse the hour
-            if isinstance(period_start, str):
-                hour = int(period_start.split("T")[1].split(":")[0])
-            else:
-                # Assume it's already a datetime object
-                hour = period_start.hour
-
-            hourly_values[hour] = float(entry[pv_field])
-
-        # Convert hourly to quarterly resolution
-        # Each hourly value is divided by 4 to get per-quarter-hour energy
-        quarterly_values = []
-        for hourly_value in hourly_values:
-            quarter_value = hourly_value / 4.0
-            quarterly_values.extend([quarter_value] * 4)
-
-        return quarterly_values
+        return solcast_detailed_hourly_to_quarterly(hourly_data)
 
     def get_solar_forecast(self):
         """Get solar forecast data in quarterly resolution (96 periods).
@@ -2814,10 +2835,12 @@ class HomeAssistantAPIController:
 
         Falls through to the derived path whenever the direct reading is
         missing — the gate is the runtime value, not the platform, so an
-        unmapped *or* momentarily unavailable entity reaches it. SolaX native,
-        Solis and Huawei are the platforms with no native load register at
-        all, so they take it on every call; any other platform lands here only
-        while its own load sensor is unreadable.
+        unmapped *or* momentarily unavailable entity reaches it. SolaX native
+        has no native load register at all and always takes the derived path.
+        Solis exposes one natively (solis_modbus register 33177) and Huawei
+        does on EMMA installs with the entity enabled (#730); both take the
+        derived path only when that sensor is absent or unreadable, as any
+        other platform does.
 
         The derived value comes from the energy balance (see
         :func:`core.bess.energy_balance.derive_load_consumption`), which needs
@@ -3080,6 +3103,51 @@ class HomeAssistantAPIController:
             if stat.get("statistic_id") == entity_id:
                 return entity_id
         return None
+
+    def get_history_period(
+        self,
+        entity_ids: list[str],
+        start_time: str,
+        end_time: str,
+    ) -> list[list[dict]]:
+        """Fetch raw state history for entities via the REST history endpoint.
+
+        Wraps ``GET /api/history/period/<start_time>`` — Home Assistant's
+        recorder-backed history API. Used by ``ha_recorder_helper`` to
+        reconstruct per-period energy actuals without an external time-series
+        database.
+
+        The response is one list of state entries per requested entity, in the
+        request's entity order. ``minimal_response`` means only the first entry
+        of each list carries ``entity_id``; later entries carry just ``state``
+        and ``last_changed`` / ``last_updated``. HA also prepends the state as
+        it was at ``start_time``, so a caller does not need a separate "value
+        before the window" query.
+
+        Args:
+            entity_ids: Full entity IDs to fetch (e.g. ``["sensor.x", ...]``).
+            start_time: ISO 8601 timestamp for range start.
+            end_time: ISO 8601 timestamp for range end.
+
+        Returns:
+            List of per-entity state-entry lists. Empty list if HA returned no
+            content.
+        """
+        path = f"/api/history/period/{start_time}"
+        params = {
+            "filter_entity_id": ",".join(entity_ids),
+            "end_time": end_time,
+            "minimal_response": "",
+            "no_attributes": "",
+        }
+        result = self._api_request(
+            "get",
+            path,
+            operation="Fetch recorder history period",
+            category="historical_data",
+            params=params,
+        )
+        return result or []
 
     def discover_ha_metadata(
         self,

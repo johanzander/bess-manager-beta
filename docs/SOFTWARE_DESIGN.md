@@ -43,14 +43,14 @@ def start() -> None
 
 **Key Responsibilities**:
 
-- Collect quarterly (15-minute) energy measurements from InfluxDB and real-time sensors
+- Collect quarterly (15-minute) energy measurements from Home Assistant's recorder and real-time sensors
 - Calculate detailed energy flows (solar-to-home, grid-to-battery, etc.)
 - Validate energy balance and detect sensor anomalies
 - Reconstruct historical data during system startup
 
 **Data Sources**:
 
-- InfluxDB for historical cumulative sensor data
+- Home Assistant recorder (`/api/history/period`) for historical cumulative sensor data
 - Home Assistant API for real-time readings
 - Sensor abstraction layer for device independence
 
@@ -220,7 +220,7 @@ sell_price = spot_price * export_rate - tax_reduction
 
 1. Sensor Collection
 
-   └── SensorCollector reads InfluxDB + real-time sensors
+   └── SensorCollector reads HA recorder history + real-time sensors
    └── Calculate energy flows and validate balance
 
 2. Historical Recording
@@ -255,15 +255,22 @@ sell_price = spot_price * export_rate - tax_reduction
 
 2. Historical Reconstruction
 
-   └── SensorCollector queries InfluxDB for today's data
+   └── SensorCollector queries the HA recorder for today's data
    └── Rebuild HistoricalDataStore with actual measurements
 
-3. Initial Optimization
+3. Price cache warm-up
+
+   └── PriceManager.refresh_cache() fetches today (+ tomorrow, once the
+       market has published it) into the cache, synchronously, once
+   └── The optimizer thereafter reads prices cache-only; a dedicated
+       scheduler job keeps the cache warm off the control path (#709)
+
+4. Initial Optimization
 
    └── First scheduled update runs fresh optimization
    └── Apply schedule to hardware
 
-4. Service Start
+5. Service Start
 
    └── Begin hourly update cycle
    └── Start power monitoring and charging adjustment
@@ -464,7 +471,7 @@ SPH controls charge power globally via `write_ac_charge_times(charge_power=100%)
 The frontend disables UI features based on **sensor presence**, which correlates with platform capabilities: if the platform lacks charge rate control, the corresponding sensor entity won't exist after discovery. This avoids needing a dedicated capabilities API endpoint — the sensor config already carries the signal.
 
 - Fuse protection toggle: disabled when `battery_charging_power_rate` sensor is not configured
-- InfluxDB consumption strategy: disabled when `local_load_power` sensor is not configured
+- load_power_7d_avg consumption strategy: disabled when `local_load_power` sensor is not configured
 - HA Statistics strategy: disabled when `lifetime_load_consumption` sensor is not configured
 
 Sensor-based gating is the right default. A dedicated capabilities API should only be introduced when the frontend needs to gate on something that doesn't map to sensor presence.
@@ -522,7 +529,7 @@ Both the official HA Nordpool integration and the older HACS custom component (`
 2. **The user selects** which provider to use in the Setup Wizard or Settings page (radio button: "Nord Pool (official HA integration)" vs "Nord Pool (HACS custom sensor)").
 3. **At runtime**, the selected provider determines how prices are fetched:
    - `nordpool_official`: Calls `nordpool.get_prices_for_date` service action (requires `config_entry_id`)
-   - `nordpool`: Reads hourly prices from sensor entity attributes (`today`/`tomorrow` lists on a single entity)
+   - `nordpool`: Reads quarterly prices from a single sensor entity's attributes. The timestamp-validated `raw_today`/`raw_tomorrow` arrays are preferred; otherwise it falls back to the plain `today`/`tomorrow` lists (VAT stripped). Tomorrow's plain list is used only when the sensor's `tomorrow_valid` attribute is true — before Nordpool publishes next-day prices it stays false while `tomorrow` still mirrors `today`, which if trusted inflated cached prices by the VAT multiplier (issue #704).
 
 #### Stage 2 — Intermediate Identifiers from Entity IDs
 
@@ -619,7 +626,7 @@ The complete endpoint performs a single atomic operation that:
 1. Saves all 6 settings sections (`sensors`, `battery`, `home`, `electricity_price`, `energy_provider`, `inverter`/`growatt`) to `bess_settings.json` using read-modify-write to preserve non-wizard fields
 2. Maps the UI inverter type (MIN/GROWATT_MODBUS/SPH/SOLAX) to canonical platform names and calls `switch_inverter_platform()`
 3. Applies live updates to all running components (sensors, battery settings, home settings, price settings)
-4. Spawns a background thread that backfills historical data from InfluxDB, builds the daily schedule, and re-runs the health check
+4. Spawns a background thread that backfills historical data from the HA recorder, builds the daily schedule, and re-runs the health check
 
 #### Discovery-to-Completion Flow
 
@@ -741,7 +748,7 @@ The system operates on **quarterly resolution (15-minute periods)** throughout t
 │  - Optimization: variable-length horizon (today + tomorrow)     │
 │  - Storage: record_period(period_index, period_data)            │
 │  - Collection: Uses period indices (0-95 normal, 0-91/99 DST)   │
-│  - InfluxDB: Queries at 15-minute boundaries                    │
+│  - Recorder: Queries at 15-minute boundaries                    │
 └────────────────────────────┬────────────────────────────────────┘
                              │
                 ┌────────────┴────────────┐
@@ -804,7 +811,7 @@ The system operates on **quarterly resolution (15-minute periods)** throughout t
 - **Price Provider**: Nordpool or Octopus Energy provides quarterly prices
 - **Optimization**: Operates on variable-length arrays (today's remaining periods + tomorrow's when available)
 - **Storage**: Indexes by period_index (0-95)
-- **InfluxDB**: Queries at 15-minute boundaries
+- **Recorder**: Queries at 15-minute boundaries
 - **API**: Returns quarterly, aggregates only for display
 - **Frontend**: Displays both resolutions as user preference, except the Dashboard's intent color timeline (`BatteryModeTimeline`), which always renders at quarter-hourly granularity regardless of that preference — hourly aggregation can average away a genuine intent disagreement between quarters (#486)
 
@@ -854,7 +861,7 @@ mock-run.sh                 ← starts Docker Compose
 | Field | Used for |
 |---|---|
 | `entity_snapshot` | Verbatim `/api/states/{entity_id}` responses for every sensor BESS reads |
-| `historical_periods` | Actual measured energy flows — seeded directly into the historical store, no InfluxDB needed |
+| `historical_periods` | Actual measured energy flows — seeded directly into the historical store, no recorder query needed |
 | `price_data` | Raw quarterly prices for `nordpool_official` service call responses |
 | `addon_options` | Complete sensor entity IDs, inverter device ID, price provider config |
 | `inverter_tou_segments` | Current inverter memory state for `read_time_segments` responses |
@@ -864,7 +871,7 @@ mock-run.sh                 ← starts Docker Compose
 
 At startup, `BatterySystemManager` checks for `BESS_HISTORICAL_SEED_FILE`. If
 set, it loads `historical_periods` directly into the historical store and skips
-InfluxDB backfill entirely. The sensor collector cache is then warmed from live
+the recorder backfill entirely. The sensor collector cache is then warmed from live
 mock-HA values so runtime collections work correctly. The mock is fully
 self-contained — no external database access required.
 

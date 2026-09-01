@@ -293,7 +293,7 @@ test.describe('Setup Wizard', () => {
     // SPH lacks local_load_power; SolaX native has it (as house_load)
     const platformsWithoutLocalLoad = ['growatt_server_sph'];
     const platformsWithoutChargeRate = ['growatt_server_sph', 'solax_modbus_native', 'solis_modbus'];
-    const expectInfluxDisabled = platformsWithoutLocalLoad.includes(expected.inverterPlatform);
+    const expectLoadPowerAvgDisabled = platformsWithoutLocalLoad.includes(expected.inverterPlatform);
     // Fuse protection also needs phase-current sensors (current_l1/l2/l3) discovered,
     // independent of the platform's charge-rate-control capability — a platform that
     // supports charge rate control can still lack phase sensors on an install with no
@@ -313,12 +313,12 @@ test.describe('Setup Wizard', () => {
     await page.getByRole('button', { name: /Next: Home/i }).click();
     await expectActiveStep(page, 4);
 
-    // InfluxDB radio should be disabled on platforms without local_load_power
-    const influxRadio = radioByLabel(page, 'InfluxDB (requires InfluxDB integration)');
-    if (expectInfluxDisabled) {
-      await expect(influxRadio).toBeDisabled();
+    // Load Power 7-day Avg radio should be disabled on platforms without local_load_power
+    const loadPowerAvgRadio = radioByLabel(page, 'Load Power 7-day Avg');
+    if (expectLoadPowerAvgDisabled) {
+      await expect(loadPowerAvgRadio).toBeDisabled();
     } else {
-      await expect(influxRadio).toBeEnabled();
+      await expect(loadPowerAvgRadio).toBeEnabled();
     }
 
     // Fuse protection toggle should be disabled on platforms without charge rate control
@@ -589,5 +589,36 @@ test.describe('Setup Wizard — undetected inverter platform', () => {
     await expect(
       page.getByRole('button', { name: /Next: Electricity Pricing/i }),
     ).toBeEnabled();
+  });
+
+  // #730: Huawei (EMMA) and Solis both expose a native lifetime
+  // load-consumption entity, but the wizard's platform definitions offered no
+  // field to map it — so their users could never enable the HA Statistics
+  // consumption strategy, which needs a Recorder-tracked lifetime-consumption
+  // sensor. The Lifetime Energy group must now render the field for both.
+  test('Huawei Lifetime Energy group includes a load-consumption field', async ({
+    page,
+  }) => {
+    await page.goto('/setup');
+    await expectActiveStep(page, 1);
+
+    await page.getByRole('tab', { name: /Huawei/i }).click();
+    await expect(page.getByText('Lifetime Energy')).toBeVisible();
+    await expect(
+      page.getByText('Total Energy Consumption (EMMA)'),
+    ).toBeVisible();
+  });
+
+  test('Solis Lifetime Energy group includes a load-consumption field', async ({
+    page,
+  }) => {
+    await page.goto('/setup');
+    await expectActiveStep(page, 1);
+
+    await page.getByRole('tab', { name: /Solis Modbus/i }).click();
+    await expect(page.getByText('Lifetime Energy')).toBeVisible();
+    await expect(
+      page.getByText('Total Energy Consumption', { exact: true }),
+    ).toBeVisible();
   });
 });

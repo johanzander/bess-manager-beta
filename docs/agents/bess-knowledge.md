@@ -541,12 +541,23 @@ Two limits to keep in mind when analysing this:
   SOLAR_EXPORT/SOLAR_STORAGE that cost is zero (planned deficit is zero), which
   is why the simulator does mirror the gate for those.
 
-**VPP platforms are still excluded** (`discharge_rate_is_load_following` is
-False there): their `discharge_rate` is an immediate forced power command, not
-a load-following ceiling (#324), so opening the gate would command a full-power
-discharge rather than permit a gentle cover. The VPP half of #520 maps the
-gate's *decision* (release control / hold) rather than its rate, and is
-deferred to candidate-scoring work.
+**VPP platforms are still excluded from the ceiling-raising form**
+(`discharge_rate_is_load_following` is False there): their `discharge_rate` is
+an immediate forced power command, not a load-following ceiling (#324), so
+opening the gate would command a full-power discharge rather than permit a
+gentle cover. The VPP half of #520 instead expresses the same economic test as
+an **energy budget** (`core/bess/vpp_load_tracking.py`): a closed gate on a
+`LOAD_SUPPORT` period yields a budget equal to that period's planned discharge
+energy (`budget_for_period`), and an opt-in
+(`vpp_load_tracking_enabled`, default off) tick loop rewrites `vpp_power`
+against the measured house deficit until the budget is spent, then holds
+(`VPP_HOLD_POWER_PCT` — `battery_first` at +1%). An open gate returns no budget
+and control is released exactly as #413 does today. The earlier proposal to map
+only the gate's release/hold *decision* (draft PR #537) was withdrawn: on VPP a
+bare hold abandons the planned discharge entirely (118.11 kWh across the
+corpus), where TOU's closed gate still delivers it. `simulation/vpp_simulator.py`
+models the budget-capped branch; with the opt-in off the VPP corpus stays
+byte-identical.
 
 The `shadow_price == 0.0` ambiguity that #520's TOU half would otherwise have
 inherited (an uncomputed bottom-grid-level value opening the ceiling
@@ -859,7 +870,7 @@ The optimizer needs a consumption forecast.  Four strategies exist:
   and the forecast correctly bakes that load in.  Higher during evening
   peaks, lower overnight.  A regular habit can be excluded deliberately via
   **Managed Loads**, below.
-- **influxdb_7d_avg**: Same concept but queries InfluxDB instead of HA.
+- **load_power_7d_avg**: Same concept, from the past 7 days of the `local_load_power` sensor in HA's recorder — 15-min resolution, and works on platforms with no lifetime load-energy entity.
 - **sensor**: Reads a 48-hour rolling average sensor.  Produces a flat
   prediction (same value all day).
 - **fixed**: A single fixed kWh/hour value.  Does not adapt.
@@ -868,7 +879,7 @@ The optimizer needs a consumption forecast.  Four strategies exist:
 min) refreshes the consumption forecast on a strategy-aware basis, not just
 at startup/23:55.  `sensor` and `fixed` refetch every quarterly cycle — cheap
 and, for `sensor`, actually intraday-moving.  `ha_statistics` and
-`influxdb_7d_avg` average a window of full calendar days ending at today's
+`load_power_7d_avg` average a window of full calendar days ending at today's
 midnight, so that value is provably unchanged until the date rolls over —
 they're cached and only refetched once the date changes, not on a clock
 timer.  Solar has no cache at all: it's fetched live from the HA forecast
@@ -884,7 +895,7 @@ declares what differs from normal, and BESS composes it onto whichever
 strategy is configured.
 
 It is **not a fifth strategy**.  It is a post-processing stage, so it applies
-identically on top of `ha_statistics`, `influxdb_7d_avg`, `sensor` and
+identically on top of `ha_statistics`, `load_power_7d_avg`, `sensor` and
 `fixed`.  An install with no overlay entity configured keeps precisely the
 forecast it would have had — "no overlay" is a supported configuration, not a
 degraded one, which is why the feature has no cold-start step.
@@ -924,10 +935,12 @@ own flaw is untouched here and still awaits a fix.
 unavailable, or malformed raises `ConsumptionOverlayError` rather than being
 skipped — a user who declared an EV session is worse served by an
 optimization that quietly ignored it.  The one exception is over-subtraction:
-a block removing more load than the base forecast holds clamps that period to
-zero (negative consumption is not physical) and records a
+a block removing more load than the base forecast holds *in that period*
+clamps it to zero (negative consumption is not physical) and records a
 `CONSUMPTION_OVERLAY_CLAMPED` runtime failure, so it is surfaced rather than
-silent.
+silent.  Only periods the overlay itself drove negative count towards that
+failure — a negative the base forecast already carried is floored the same
+way but is not blamed on the overlay (issue #734).
 
 
 ### Managed Loads (issue #706)
@@ -945,10 +958,10 @@ excluded.  The user then re-declares any expected managed-load energy via
 Planned Consumption Changes (`add` mode), which composes on top of the
 residual exactly as it does on top of any other baseline.
 
-Scoped to `ha_statistics` only: `influxdb_7d_avg` pulls instantaneous power
-samples from InfluxDB, a different data source/shape than HA Recorder's
-cumulative `change` values, and needs its own subtraction mechanism if ever
-added.
+Scoped to `ha_statistics` only: `load_power_7d_avg` averages instantaneous
+`local_load_power` samples from the recorder, a different data source/shape
+than HA Recorder's cumulative `change` values, and needs its own subtraction
+mechanism if ever added.
 
 **Failure behaviour** (`managed_loads.subtract_managed_loads`): a configured
 managed-load sensor with no statistics data raises `ManagedLoadsError` rather

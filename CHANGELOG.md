@@ -4,6 +4,27 @@ All notable changes to BESS Battery Manager will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [10.1.1b4] - 2026-08-31
+
+### Added
+
+- **Groundwork for VPP load tracking** — adds the opt-in `vpp_load_tracking_enabled` setting (default off) and the energy-budget model behind it; the live tracking loop follows separately. ([#520](https://github.com/johanzander/bess-manager/issues/520))
+
+### Changed
+
+- **Cold-start history now comes from Home Assistant's recorder** — a fresh install, or one restarting after a long outage, backfills today's actual energy flows from HA's own history instead of requiring the InfluxDB add-on. ([#722](https://github.com/johanzander/bess-manager/issues/722))
+- **The 7-day load-power consumption forecast reads the recorder, not InfluxDB** — the strategy is renamed `influxdb_7d_avg` → `load_power_7d_avg` (the old value keeps working), needs no InfluxDB, and now also works on platforms with no lifetime load-energy sensor (SolaX Native, Solis). ([#722](https://github.com/johanzander/bess-manager/issues/722))
+- **InfluxDB support is deprecated** — installs that still have InfluxDB credentials configured see a one-time dashboard banner with migration notes. Nothing to do for most; the option is removed in a later update. ([#722](https://github.com/johanzander/bess-manager/issues/722))
+
+### Fixed
+
+- **The HA Statistics consumption strategy is now available on Huawei (EMMA) and Solis** — the setup wizard exposes their lifetime load-consumption sensor, and discovery auto-maps it where present. ([#730](https://github.com/johanzander/bess-manager/issues/730))
+- **A positive-only Planned Consumption Changes block no longer triggers a false "subtracted more than the forecast held" warning** — the clamped-period count now counts only periods the overlay itself drove negative, not ones the base forecast already held. ([#734](https://github.com/johanzander/bess-manager/issues/734))
+- **A slow or failing electricity-price fetch no longer delays or skips the top-of-hour battery mode switch** — price fetching moved to its own scheduler job off the control path, and the optimizer reads a cache that a dedicated job keeps warm. ([#709](https://github.com/johanzander/bess-manager/issues/709))
+- **The "Strategic Intent" dashboard card no longer overflows when the current period is curtailed** — the "Curtailed (No Export)" note now renders as a small badge under the headline instead of being appended to the large headline text. ([#676](https://github.com/johanzander/bess-manager/issues/676))
+- **Tomorrow's prices no longer get stuck at an inflated value on the HACS Nordpool integration** — before Nordpool publishes next-day prices, BESS now waits for the sensor's `tomorrow_valid` flag instead of trusting a `tomorrow` array that still mirrors today, and it strips VAT from that array like every other price path. ([#704](https://github.com/johanzander/bess-manager/issues/704))
+- **The battery no longer drains to empty before midnight and re-imports in the morning when the overnight consumption forecast has an empty hour** — an empty HA-statistics bucket or a managed-load clamp put 0 kWh into an overnight period, which the terminal-value calculation misread as "solar has taken over the house" and collapsed the overnight reserve. ([#715](https://github.com/johanzander/bess-manager/issues/715))
+
 ## [10.1.1b3] - 2026-08-29
 
 ### Fixed

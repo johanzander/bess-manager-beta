@@ -64,96 +64,34 @@ BESS works without solar panels or a solar forecast. If you have PV and want sol
 6. Close the dialog — **BESS Battery Manager** now appears in the store
 7. Click it, then click **Install**
 
-## Step 2: Set Up InfluxDB (Optional but Recommended)
+## Step 2: Historical Data (Automatic)
 
-BESS uses InfluxDB to store and retrieve historical energy sensor data. Without it, the system loses
-all historical context when restarted and cannot backfill the energy balance chart after startup.
-It is not required for optimization to work, but strongly recommended.
+Nothing to set up here. BESS reads historical energy data from **Home Assistant's
+built-in recorder** — the same history HA keeps for its own dashboards. On a
+restart, or on a fresh install part-way through the day, it backfills today's
+actual energy flows from the recorder automatically.
 
-### 2a: Install InfluxDB
+The only requirement is that HA's recorder keeps recent history for the sensors
+BESS uses. The default (10 days, all entities) is plenty. If you have a custom
+`recorder:` configuration, make sure it does **not** `exclude` your BESS
+sensors and keeps at least **2 days** of history (`purge_keep_days: 2` or more).
 
-1. Go to **Settings → Add-ons → Add-on Store**
-2. Search for **InfluxDB** and install it
-3. Start the add-on and open the web UI
+### Migrating from the InfluxDB add-on
 
-### 2b: Create an InfluxDB Write User for Home Assistant
+Earlier versions of BESS read history from an InfluxDB instance. That is no
+longer used — the recorder covers it. If you set BESS up that way:
 
-Home Assistant needs its own user with **WRITE** access to push sensor data into InfluxDB.
-
-1. Open the **InfluxDB web UI** (from the add-on page, click **Open Web UI**)
-2. Go to **Settings → Users**
-3. Create a user, for example `homeassistant`, with a password
-4. Grant it **WRITE** access to the `homeassistant` database
-
-> **Note:** This is a separate user from the BESS read-only user created in step 2d below.
-> HA writes data; BESS reads it. Keep them separate so BESS cannot accidentally modify data.
-
-### 2c: Configure Home Assistant to Write to InfluxDB
-
-Add the following to your `configuration.yaml`:
-
-```yaml
-influxdb:
-  host: localhost
-  port: 8086
-  database: !secret influxdb_database
-  username: !secret influxdb_username
-  password: !secret influxdb_password
-  max_retries: 3
-  include:
-    domains:
-      - sensor
-```
-
-And add the corresponding entries to `secrets.yaml`:
-
-```yaml
-influxdb_database: homeassistant
-influxdb_username: homeassistant
-influxdb_password: your_ha_writer_password
-```
-
-After restarting Home Assistant, sensor states will start being written to InfluxDB.
-
-> **Note:** In the InfluxDB UI under **Configuration**, you should see the connection listed as
-> `http://localhost:8086` — **CONNECTED**. The database `homeassistant` appears under **Explore**.
-
-### 2d: Create a Read-Only InfluxDB User for BESS
-
-BESS only needs read access to InfluxDB. Create a dedicated user:
-
-1. Open the **InfluxDB web UI** (from the add-on page, click **Open Web UI**)
-2. Go to **Settings → Users** (InfluxDB 1.x admin UI at `http://homeassistant.local:8086`)
-3. Create a new user, for example `bess`, with a password
-4. Grant it **READ** access to the `homeassistant` database
-
-### 2e: Configure BESS to Connect to InfluxDB
-
-Add the following to your BESS add-on configuration:
-
-```yaml
-influxdb:
-  url: "http://homeassistant.local:8086/api/v2/query"
-  bucket: "homeassistant/autogen"
-  username: "bess"
-  password: "your_password_here"
-```
-
-> **⚠️ The bucket name is not just the database name.**
-> InfluxDB 1.x organises data as `<database>/<retention_policy>`. The default retention policy is
-> `autogen`, so the bucket must be set to `homeassistant/autogen` — not just `homeassistant`.
-> This is the most common misconfiguration.
-
-> **URL note:** Use `http://homeassistant.local:8086/api/v2/query` if BESS runs on the same machine
-> as Home Assistant. If InfluxDB is on a separate host, replace the hostname with the IP address,
-> e.g. `http://192.168.1.100:8086/api/v2/query`.
-
-### 2f: Verify the Connection
-
-After starting BESS, go to **Settings → System** in the web interface. The
-**Historical Data Access** component should show **OK**. If it shows a warning like
-*"returned no valid data"*, the most likely cause is an incorrect bucket name — double-check
-that you have used `homeassistant/autogen` and not just `homeassistant`.
+- **You usually need to do nothing.** The recorder path takes over on its own.
+- Check your `recorder:` config as above — an `exclude:` block that drops the
+  BESS sensors, or a very short `purge_keep_days`, is the one thing that leaves
+  gaps now.
+- The `influxdb` block in the BESS add-on configuration is ignored and can be
+  removed. It will stop being a valid option in an update about a month after
+  this one; while BESS still sees configured InfluxDB credentials it shows a
+  one-time dashboard banner as a reminder.
+- Your **InfluxDB database** and the Home Assistant `influxdb:` integration that
+  writes to it are unaffected — remove them at your own pace if nothing else
+  uses them.
 
 ## Step 3: Choose a Home Consumption Forecast
 
@@ -169,7 +107,7 @@ manual sensor setup — see below.
 | Strategy | Accuracy | What you must configure |
 |----------|----------|-------------------------|
 | **`ha_statistics`** ✅ recommended | High — real home consumption (incl. solar self-use), time-of-day shaped | Nothing beyond selecting it. Needs the inverter's lifetime load-consumption sensor (auto-discovered) and ~7 days of HA history |
-| `influxdb_7d_avg` | High — same data source, 15-min resolution | Requires an InfluxDB instance (Step 2) and the `local_load_power` sensor |
+| `load_power_7d_avg` | High — 15-min resolution, works without a lifetime load-energy entity | Requires the `local_load_power` sensor and ~7 days of HA recorder history |
 | `fixed` | Low — a single flat number, does not adapt | Manually enter a kWh/hour value (`home.default_hourly`) |
 | `sensor` (legacy) | Low — grid-import proxy that ignores solar self-consumption, so it under-estimates load on sunny days | Requires a hand-written template sensor in `configuration.yaml` (see below) |
 
@@ -194,12 +132,14 @@ HA has accumulated enough statistics, BESS temporarily falls back to the fixed
 > stays on the fixed fallback. Allow ~7 days after setup for enough history to
 > accumulate.
 
-#### `influxdb_7d_avg`
+#### `load_power_7d_avg`
 
-Same idea, but reads the `local_load_power` sensor from InfluxDB at 15-minute
-resolution. Equally accurate; choose this over `ha_statistics` only if you
-already run InfluxDB and want the finer resolution. Requires Step 2 and the
-`local_load_power` sensor configured.
+Same idea, but reads the `local_load_power` sensor from Home Assistant's
+recorder at 15-minute resolution. Equally accurate, and the only history-based
+option on platforms that have no lifetime load-consumption entity for
+`ha_statistics` to read (e.g. SolaX Native, Solis). Requires the
+`local_load_power` sensor configured and ~7 days of recorder history. (Formerly
+`influxdb_7d_avg`; the old id is still accepted in settings.)
 
 #### `fixed`
 
@@ -254,6 +194,28 @@ sensor:
 > `entity_id: sensor.<your_local_load_power>` on the statistics sensor. Keep the
 > friendly name containing `48h` and `grid import` so BESS still auto-discovers
 > it. This is the cleaner way to do it if you must use `sensor`.
+
+### Adjusting the forecast: Managed Loads and Planned Consumption Changes
+
+The strategy you pick above describes your *normal* consumption. Two optional
+settings adjust it — neither is needed for a working install:
+
+- **Managed Loads** (`ha_statistics` only) — name a metered recurring load (in
+  practice, an EV charger) and BESS subtracts its history before building the
+  profile. Use it when a load you run most days would otherwise be averaged
+  into *every* day's forecast.
+- **Planned Consumption Changes** — a template sensor that declares what
+  deviates from normal on a given day ("the EV needs 40 kWh by 06:00", "away
+  all week", "skip the pool pump today"). It is not a fifth strategy; it
+  applies on top of whichever one you use, and does nothing until you
+  configure it.
+
+The recommended EV setup combines both: exclude the charger under Managed
+Loads, then announce each session under Planned Consumption Changes, so the
+only EV energy in the plan is the amount you declared. Both are configured in
+the web interface (**Settings → Home** and **Settings → Sensors**); see the
+[User Guide](USER_GUIDE.md#managed-loads--excluding-a-regular-habit-from-the-baseline)
+for the template sensor format and worked examples.
 
 ## Step 4: Configure BESS Manager
 
@@ -463,7 +425,11 @@ The DoD is already factored into the warranty cycle count, so you don't need to 
 
 **Solution:** Check `cycle_cost` is in correct currency (see Step 4)
 
-### Troubleshooting InfluxDB
+### Troubleshooting InfluxDB (legacy)
+
+> BESS no longer reads InfluxDB — see [Step 2](#step-2-historical-data-automatic). This section
+> only applies to older setups still pointing BESS at an InfluxDB instance, and is removed once
+> the `influxdb` option is.
 
 If the **Historical Data Access** health check shows WARNING or the energy balance chart is empty,
 follow these steps in order.

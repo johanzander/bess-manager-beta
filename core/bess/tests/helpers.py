@@ -8,6 +8,8 @@ Reduces boilerplate across test files by providing:
 - Behavioral assertion helpers for strategic intents and physical constraints
 """
 
+from typing import Any
+
 from core.bess.dp_battery_algorithm import (
     _period_flows,
     optimize_battery_schedule,
@@ -26,6 +28,7 @@ from core.bess.terminal_value import (
     TerminalValueCurve,
     curve_from_knee,
     knee_kwh_from_trailing_darkness,
+    pv_covers_load,
 )
 
 
@@ -167,7 +170,7 @@ def scenario_terminal_curve(scenario: dict) -> TerminalValueCurve:
         inputs["sell_price"][-periods_per_day:],
         knee_kwh_from_trailing_darkness(consumption, solar, settings),
         pv_refills=any(
-            produced >= consumed
+            pv_covers_load(consumed, produced)
             for consumed, produced in zip(consumption, solar, strict=True)
         ),
         battery_settings=settings,
@@ -437,7 +440,7 @@ def make_battery_settings(**overrides):
 
     Accepts keyword overrides for any BatterySettings field.
     """
-    defaults = {
+    defaults: dict[str, Any] = {
         "total_capacity": 20.0,
         "min_soc": 11.0,
         "max_soc": 100.0,

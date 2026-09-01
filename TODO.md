@@ -1,11 +1,32 @@
 # Energy Management System Improvements - Prioritized Implementation Plan
 
 
+### **A negative base consumption forecast is floored silently when an overlay is configured**
+
+**Impact**: Low | **Effort**: Low | **Dependencies**: `core/bess/consumption_overlay.py`, `core/bess/battery_system_manager.py`
+
+**Description**: After the #734 fix, `apply_overlay` still floors every negative in the composed forecast to zero, but only attributes a period to `clamped_periods` when the overlay itself drove it negative. A negative the configured consumption strategy emitted (net-metering / bad-recorder artifact) is therefore floored with no log line and no runtime failure — but only when an overlay entity is configured; without one, `_apply_consumption_overlay` returns early and the negative reaches the DP unchanged. Pre-#734 it produced a (misattributed) `CONSUMPTION_OVERLAY_CLAMPED` warning. The reporter's own suggestion: validate/report a negative base forecast separately from overlay over-subtraction, so the data-quality problem surfaces regardless of overlay config. Raised in the #734 code review.
+
+
 ### **`sample_live_power()` gates on the wrong sensor list**
 
 **Impact**: Low | **Effort**: Low | **Dependencies**: `sensor_collector.py`
 
 **Description**: `sample_live_power()` early-returns on `if not self.power_sensors`, but `power_sensors` comes from `_resolve_power_sensor_ids()`, which deliberately *excludes* shared signed entities (their direction is unrecoverable from an InfluxDB period mean). The sampling loop itself never touches `power_sensors` — it calls the sign-splitting getters, which handle those entities fine. So an install whose only mapped power sensors are the shared signed ones gets no live sampling at all, silently disabling the `PowerSampleBuffer` path that `_shared_signed_power_entities()`'s docstring names as the covering fallback for exactly those installs. The guard should test the flow map / getters instead. Pre-existing; found during the #604 review, which widens the set of installs hitting the exclusion.
+
+
+### **`ha_recorder_helper.get_sensor_data_batch` rescans each sample list per period**
+
+**Impact**: Low | **Effort**: Low | **Dependencies**: `core/bess/ha_recorder_helper.py`
+
+**Description**: `get_sensor_data_batch` loops `for period in range(96)` and, inside, re-walks each entity's full sorted sample list to find the last value at/before the period boundary — O(96·S) per sensor. A single forward-merge pass (advance one pointer through the sorted samples as `period` increases) is O(S+96). Verbatim port of `influxdb_helper._parse_batch_response`'s existing nested loop; not a regression. Matters once PR 2 of #722 wires this into cold-start backfill over up to ~10 days of state changes. Raised in the PR 1 (#722) code review.
+
+
+### **Dashboard banners re-implement the same amber/red shell four times**
+
+**Impact**: Low | **Effort**: Low-Medium | **Dependencies**: `frontend/src/components/*Banner*`, `DashboardPage.tsx`
+
+**Description**: `AlertBanner`, `RuntimeFailureAlerts`, the inline yellow partial-data `<div>` in `DashboardPage.tsx`, and now `DeprecationBanner` (#722 PR 4) each hand-roll the same Tailwind shell — `bg-amber-50 dark:bg-amber-900/20 border …`, `flex items-start space-x-3` + icon + `h3` + `aria-label="Dismiss"` X button, same action-link classes. Styling/dark-mode/spacing changes have to be made in every copy and will drift. A shared presentational `<BannerShell variant tone>` carrying the shell + dismiss button once would collapse them. Raised in the #722 PR 4 review; `DeprecationBanner` is self-contained and removed in PR 6, so this is only worth doing if the shell is extracted for the others too.
 
 
 ### **`describe_failing_checks()` is dead code after the device-grouping banner**
