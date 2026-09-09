@@ -1607,6 +1607,7 @@ class HomeAssistantAPIController:
     def set_charge_stop_soc(self, charge_stop_soc):
         """Set the charge stop state of charge (SOC)."""
         entity_id = self._get_entity_for_service("battery_charge_stop_soc")
+        logger.info("Set charge stop SOC -> %s%%", charge_stop_soc)
         self._set_number_like(entity_id, charge_stop_soc, "Set charge stop SOC")
 
     def get_discharge_stop_soc(self):
@@ -1616,6 +1617,7 @@ class HomeAssistantAPIController:
     def set_discharge_stop_soc(self, discharge_stop_soc):
         """Set the discharge stop state of charge (SOC)."""
         entity_id = self._get_entity_for_service("battery_discharge_stop_soc")
+        logger.info("Set discharge stop SOC -> %s%%", discharge_stop_soc)
         self._set_number_like(entity_id, discharge_stop_soc, "Set discharge stop SOC")
 
     def get_charging_power_rate(self):
@@ -1625,6 +1627,7 @@ class HomeAssistantAPIController:
     def set_charging_power_rate(self, rate):
         """Set the charging power rate."""
         entity_id = self._get_entity_for_service("battery_charging_power_rate")
+        logger.info("Set charging power rate -> %s%%", rate)
         self._set_number_like(entity_id, rate, "Set charging power rate")
 
     def get_discharging_power_rate(self):
@@ -1634,6 +1637,7 @@ class HomeAssistantAPIController:
     def set_discharging_power_rate(self, rate):
         """Set the discharging power rate."""
         entity_id = self._get_entity_for_service("battery_discharging_power_rate")
+        logger.info("Set discharging power rate -> %s%%", rate)
         self._set_number_like(entity_id, rate, "Set discharging power rate")
 
     def _is_shared_signed_battery_power(self) -> bool:
@@ -1917,6 +1921,16 @@ class HomeAssistantAPIController:
             )
 
         enabled_str = "enabled" if enabled else "disabled"
+        # #717: log the commanded value so a debug bundle shows the TOU-segment
+        # write, not only a failure. Matches set_tou_segment_via_entities.
+        logger.info(
+            "Set inverter TOU segment %d -> mode=%s %s-%s (%s)",
+            segment_id,
+            batt_mode,
+            start_time,
+            end_time,
+            enabled_str,
+        )
         self._service_call_with_retry(
             self._vendor_service_domain(),
             "update_time_segment",
@@ -2001,6 +2015,18 @@ class HomeAssistantAPIController:
 
         mode_option = self._MODBUS_MODE_OPTIONS[batt_mode]
         enabled_option = "Enabled" if enabled else "Disabled"
+
+        # #717: a successful TOU-segment write left no INFO trace (the sub-calls
+        # pass operation= strings that only surface on failure), so a debug
+        # bundle could not show what mode/window was commanded.
+        logger.info(
+            "Set TOU segment %d -> mode=%s enabled=%s %s-%s",
+            segment_id,
+            batt_mode,
+            enabled,
+            start_time,
+            end_time,
+        )
 
         # solax_modbus's Growatt plugin exposes TOU begin/end only as `time.*`
         # domain entities (no `select.*` equivalent exists), so those two
@@ -2136,6 +2162,17 @@ class HomeAssistantAPIController:
         start_entity = self._get_entity_for_service(start_key)
         end_entity = self._get_entity_for_service(end_key)
         enable_entity = self._get_entity_for_service(enable_key)
+
+        # #717: log the commanded value so a debug bundle shows the period
+        # write, not only a FAILED: line on exception.
+        logger.info(
+            "Set Solis %s period slot %d -> %s-%s enabled=%s",
+            direction,
+            slot,
+            start_time,
+            end_time,
+            enabled,
+        )
 
         self._service_call_with_retry(
             "time",

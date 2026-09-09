@@ -4,6 +4,17 @@ All notable changes to BESS Battery Manager will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [10.1.1b5] - 2026-09-08
+
+### Added
+
+- **A debug bundle now shows the charge/discharge power-rate and stop-SOC values BESS commanded** — each write logs its value at INFO, so a bundle can confirm what was sent without needing the failure that used to be the only trace. ([#719](https://github.com/johanzander/bess-manager/issues/719))
+- **A debug bundle now also shows the TOU mode BESS commanded each period** — TOU-segment and Solis-period writes log at INFO, including when a period deliberately leaves the mode unchanged, and these lines survive compact-log trimming. ([#717](https://github.com/johanzander/bess-manager/issues/717))
+
+### Changed
+
+- **The System Health page no longer probes InfluxDB** — with historical reads now served by HA's recorder, the "Historical Data Access" check gave a false warning to installs that had correctly removed the InfluxDB add-on. ([#745](https://github.com/johanzander/bess-manager/pull/745))
+
 ## [10.1.1b4] - 2026-08-31
 
 ### Added
