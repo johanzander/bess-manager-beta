@@ -102,6 +102,7 @@ class APISavingsBucket:
     importEur: FormattedValue
     exportKwh: FormattedValue
     exportEur: FormattedValue
+    homeConsumptionKwh: FormattedValue
     gridCost: FormattedValue
     gridOnlyCost: FormattedValue
     netSavings: FormattedValue
@@ -131,6 +132,9 @@ class APISavingsBucket:
             importEur=create_formatted_value(t.import_eur, "currency", currency),
             exportKwh=create_formatted_value(t.export_kwh, "energy_kwh_only", currency),
             exportEur=create_formatted_value(t.export_eur, "currency", currency),
+            homeConsumptionKwh=create_formatted_value(
+                t.home_consumption_kwh, "energy_kwh_only", currency
+            ),
             gridCost=create_formatted_value(t.grid_cost, "currency", currency),
             gridOnlyCost=create_formatted_value(t.grid_only_cost, "currency", currency),
             netSavings=create_formatted_value(
@@ -383,6 +387,15 @@ class APIDashboardHourlyData:
     # All user-facing data via FormattedValue - canonical naming
     solarProduction: FormattedValue
     homeConsumption: FormattedValue
+    # Home-load forecast split (#749). predictedResidualLoad is the unmanaged
+    # forecast (post Managed Loads, pre Planned Consumption Changes);
+    # plannedManagedLoad is the net the #428 overlay applied for this period;
+    # predictedTotalLoad is what the optimizer planned against
+    # (residual + planned). For a period with no split available these fall
+    # back to residual == total == homeConsumption, planned == 0.
+    predictedResidualLoad: FormattedValue
+    plannedManagedLoad: FormattedValue
+    predictedTotalLoad: FormattedValue
     batterySocStart: FormattedValue
     batterySocEnd: FormattedValue
     batterySoeStart: FormattedValue
@@ -451,6 +464,18 @@ class APIDashboardHourlyData:
         home_consumption = hourly.energy.home_consumption
         direct_solar = min(solar_production, home_consumption)
 
+        # Home-load forecast split (#749). Absent for a period with no plan
+        # (overlay-free install, missing placeholder): everything is residual.
+        breakdown = hourly.consumption_breakdown
+        if breakdown is not None:
+            residual_load = breakdown.residual
+            planned_load = breakdown.planned
+            total_load = breakdown.total
+        else:
+            residual_load = home_consumption
+            planned_load = 0.0
+            total_load = home_consumption
+
         # Period index (0-23 for hourly, 0-95 for quarterly)
         # Frontend correctly handles different resolutions via resolution parameter
         return cls(
@@ -461,6 +486,9 @@ class APIDashboardHourlyData:
             # Energy flows
             solarProduction=safe_format(solar_production, "energy_kwh_only"),
             homeConsumption=safe_format(home_consumption, "energy_kwh_only"),
+            predictedResidualLoad=safe_format(residual_load, "energy_kwh_only"),
+            plannedManagedLoad=safe_format(planned_load, "energy_kwh_only"),
+            predictedTotalLoad=safe_format(total_load, "energy_kwh_only"),
             # Battery state - EnergyData uses battery_soe (State of Energy in kWh)
             batterySocStart=safe_format(
                 (hourly.energy.battery_soe_start / battery_capacity) * 100.0,

@@ -4,6 +4,19 @@ All notable changes to BESS Battery Manager will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [10.1.1b6] - 2026-09-12
+
+### Added
+
+- **Savings Report: Week view and per-period energy totals** — the report gains a **Week** resolution alongside Day/Month/Year, and each period now shows an **Energy** card with that period's home load, solar production, grid import, grid export and battery discharge — so you can zoom out and see both earnings and energy at a glance. Home consumption is now aggregated into the savings buckets (`homeConsumptionKwh`). ([#753](https://github.com/johanzander/bess-manager/pull/753))
+- **Browse the Dashboard for earlier days** — the Dashboard gains a date selector with day-back/forward arrows so you can review how the system actually behaved on a past day (energy flows, schedule, SOC, and that day's cost & savings), the way the Growatt app lets you page back. Historical days are read from the persisted daily-view store. For a past day the System Overview shows just that day's Cost & Savings; the genuinely live widgets (real-time power/battery tiles, the "now" marker, tomorrow's plan) are today-only. ([#752](https://github.com/johanzander/bess-manager/pull/752))
+- **The dashboard Home Load curve now splits into residual and planned** — see which of the load is ordinary predicted usage and which is a known Planned Consumption Changes block (e.g. EV charging), with actual-vs-planned on elapsed periods. ([#749](https://github.com/johanzander/bess-manager/issues/749))
+
+### Fixed
+
+- **Growatt VPP and SolaX no longer charge at full power when the plan called for less** — `GRID_CHARGING` now commands the DP's actual planned rate instead of always full power, so a fuse-aware throttled plan (#429) is no longer silently overridden at write time, which could starve a concurrent load like an EV charger. ([#754](https://github.com/johanzander/bess-manager/issues/754))
+- **Failed Home Assistant service calls now log the response body, not just the status** — `ha_api_controller`'s retry/final-failure logs previously showed only "500 Server Error … for url …", hiding the body where the real reason lives (a Growatt cloud error, InfluxDB's "no database", etc.). They now append `response.text`, making opaque `500`s diagnosable from the log alone. ([#741](https://github.com/johanzander/bess-manager/issues/741))
+- **The Growatt charge-power-rate register is no longer re-sent to the cloud every cycle when unchanged** — `adjust_charging_power`'s direct-write path (power monitor disabled) now dedupes like the grid-charge and discharge-rate registers already do (#402), so an unchanged charge rate is no longer written to the Growatt cloud each cycle. Field logs showed this as the last un-deduped per-tick write after #402/#568. The Growatt Open API rejects some writes with a generic `GrowattV1ApiError` (no explicit limit message, so the exact cause is unconfirmed — the pattern is consistent with a write-rate/quota limit); over a multi-day observation, cutting the surplus writes coincided with fewer such rejections and no dropped writes. A likely contributor to those failures, in the same spirit as #402. ([#741](https://github.com/johanzander/bess-manager/issues/741))
 ## [10.1.1b5] - 2026-09-08
 
 ### Added
