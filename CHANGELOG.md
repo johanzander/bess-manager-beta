@@ -4,6 +4,22 @@ All notable changes to BESS Battery Manager will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [11.0.0b1] - 2026-09-20
+
+### Added
+
+- **Peak-shaving: cap grid import during a configured window** — set a time window, weekdays and a max import power, and BESS suppresses grid-charging and discharges to cover load during that window, independent of spot price. Useful for capacity/demand tariffs. ([#96](https://github.com/johanzander/bess-manager/issues/96))
+### Removed
+
+- **Removed the unused `min_profit` price setting** — it was never read by the optimizer and only ever appeared as dead noise in settings/debug bundles. ([#773](https://github.com/johanzander/bess-manager/issues/773))
+
+### Fixed
+
+- **The battery's stored-energy cost basis no longer overstates the grid's share during deliberate grid charging** — during `GRID_CHARGING` periods the accounting now attributes concurrent solar to the battery first (matching the battery-first inverter topology), instead of assuming the home-first order that only holds for solar-surplus charging. ([#536](https://github.com/johanzander/bess-manager/issues/536))
+- **A battery charged slightly above `maxSoc` no longer bricks the whole day's optimization** — when the inverter reads a hair above the configured ceiling (e.g. charges to 93% with `maxSoc` 90%), `optimize_battery_schedule` raised `initial_soe exceeds capacity` and produced no schedule, so the battery sat idle — and, unable to discharge back into range, stayed over-max and re-failed every cycle (observed: 69 consecutive failures across a full day, a peak-price evening wasted). The over-max case now clamps to `max_soe` and warns, symmetric with the existing below-min handling, letting the optimizer discharge the battery back within range. ([#771](https://github.com/johanzander/bess-manager/pull/771))
+- **The Savings Report and Dashboard date picker no longer wraps onto its own row under the resolution toggle** — on narrow layouts it now stacks above the toggle instead of leaving a misaligned gap. ([#757](https://github.com/johanzander/bess-manager/pull/757))
+- **Home Consumption forecast chart's Diff tooltip now colors by favorability, not raw sign** — using more than planned shows red and using less shows green, instead of the Solar Production coloring convention that read backwards for consumption. ([#765](https://github.com/johanzander/bess-manager/pull/765))
+
 ## [10.1.1b6] - 2026-09-12
 
 ### Added

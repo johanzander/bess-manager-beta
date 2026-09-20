@@ -64,9 +64,11 @@ from .sensor_collector import SensorCollector
 from .settings import (
     BatterySettings,
     HomeSettings,
+    PeakShavingSettings,
     PriceSettings,
     TemperatureDeratingSettings,
     apply_temperature_derating,
+    peak_shaving_import_cap_per_period,
 )
 from .solax_controller import SolaxController
 from .solax_modbus_growatt_controller import SolaxModbusGrowattController
@@ -175,6 +177,10 @@ class BatterySystemManager:
         # Initialize temperature derating (opt-in, disabled by default)
         self.temperature_derating = TemperatureDeratingSettings()
         self.temperature_derating.from_ha_config(addon_options or {})
+
+        # Initialize peak-shaving (opt-in, disabled by default; issue #96)
+        self.peak_shaving = PeakShavingSettings()
+        self.peak_shaving.from_ha_config(addon_options or {})
 
         # Store controller reference
         self._controller = controller
@@ -2307,6 +2313,30 @@ class BatterySystemManager:
 
         return derated_limits
 
+    def _get_peak_shaving_import_cap_limits(
+        self, remaining_entries: list[dict[str, Any]], dt: float
+    ) -> list[float | None] | None:
+        """Get per-period grid-import caps for a configured peak-shaving window.
+
+        Mirrors `_get_temperature_derated_charge_limits`: builds the
+        per-period array from the peak-shaving settings, or returns None
+        when disabled. Uses each price entry's own local "YYYY-MM-DD HH:MM"
+        timestamp (`PriceManager`'s format) rather than a separate forecast
+        fetch, since window membership only needs the calendar day/time,
+        already known for every period in the plan.
+
+        Args:
+            remaining_entries: Price entries for the remaining horizon (same
+                slice `_run_optimization` extracts buy/sell prices from).
+            dt: Period duration in hours.
+
+        Returns:
+            List of per-period import caps (kWh), or None if peak-shaving is
+            disabled.
+        """
+        timestamps = [entry["timestamp"] for entry in remaining_entries]
+        return peak_shaving_import_cap_per_period(self.peak_shaving, timestamps, dt)
+
     def _extract_buy_sell_prices(
         self, entries: list[dict[str, Any]]
     ) -> tuple[list[float], list[float]]:
@@ -2401,6 +2431,11 @@ class BatterySystemManager:
                 n_periods
             )
 
+            # Get peak-shaving grid-import caps if that's enabled (#96).
+            peak_shaving_import_cap_per_period = (
+                self._get_peak_shaving_import_cap_limits(remaining_entries, dt=0.25)
+            )
+
             # Run DP optimization with strategic intent capture - returns OptimizationResult directly
             result = optimize_battery_schedule(
                 buy_price=buy_prices,
@@ -2417,6 +2452,7 @@ class BatterySystemManager:
                 capabilities=self.platform_capabilities,
                 export_curtailment_active=self.export_curtailment_active,
                 home_settings=self.home_settings,
+                peak_shaving_import_cap_per_period=peak_shaving_import_cap_per_period,
             )
 
             # Add timestamps to period data (algorithm is time-agnostic, operates on relative indices)
@@ -3323,8 +3359,40 @@ class BatterySystemManager:
                 # was consuming 5.2 of it). The understated basis then fed
                 # `optimize_battery_schedule(initial_cost_basis=...)`, making
                 # stored energy look cheaper to discharge than it was.
-                solar_to_battery = event.energy.solar_to_battery
-                grid_to_battery = event.energy.grid_to_battery
+                #
+                # During DELIBERATE grid charging (`battery_first`, #536) this
+                # split is the wrong way round. `EnergyData` allocates solar to
+                # the home first, which is right for load_first surplus
+                # charging, but in battery_first the PV is DC-coupled straight
+                # to the battery and the house runs off the grid -- so solar
+                # that really did charge the battery would get booked to the
+                # home, and the battery's charge booked entirely to the grid.
+                # The retired formula (min(charged, solar), remainder to grid)
+                # is the accurate one in that regime, so use it there instead
+                # of the home-first split -- confined to this cost-basis site,
+                # per the intent already recorded on the period; EnergyData's
+                # split (and the intent classifier that reads it) is unchanged.
+                #
+                # Keyed on strategic_intent (the DP's plan), not observed_intent
+                # (inferred from flows): observed_intent is itself derived via
+                # `infer_intent_from_flows`, which decides GRID_CHARGING purely
+                # from `grid_to_battery > 0.01` on this same home-first split --
+                # so it cannot independently resolve the plan-vs-execution
+                # question and would not detect a genuine divergence either.
+                # strategic_intent is what the issue's own measurement (#536)
+                # was computed against, and what actually commanded the
+                # inverter's topology for the period.
+                if event.decision.strategic_intent == "GRID_CHARGING":
+                    solar_to_battery = min(
+                        event.energy.solar_production, event.energy.battery_charged
+                    )
+                    grid_to_battery = min(
+                        max(0.0, event.energy.battery_charged - solar_to_battery),
+                        event.energy.grid_imported,
+                    )
+                else:
+                    solar_to_battery = event.energy.solar_to_battery
+                    grid_to_battery = event.energy.grid_to_battery
 
                 # Calculate costs using same logic as everywhere else
                 solar_cost = solar_to_battery * self.battery_settings.cycle_cost_per_kwh
@@ -3354,26 +3422,6 @@ class BatterySystemManager:
                 # grid charging would have booked the whole charge as nearly
                 # free. Caught in review on this repo's own evidence bundle,
                 # `historical_2026_07_18_charge_attribution.json` period 39.
-                #
-                # Known limitation, measured rather than assumed: during
-                # DELIBERATE grid charging (`battery_first`) this split is the
-                # wrong way round. `EnergyData` allocates solar to the home
-                # first, which is right for load_first surplus charging, but in
-                # battery_first the PV is DC-coupled straight to the battery and
-                # the house runs off the grid -- so solar that really did charge
-                # the battery gets booked to the home, and the battery's charge
-                # gets booked entirely to the grid. The retired formula happened
-                # to be the accurate one in that regime.
-                #
-                # Not fixed here because the trade is measured and lopsided.
-                # Across the 30 debug bundles in `docs/`: load_first charging is
-                # 264 periods / 191.1 kWh where this correction ADDS 55.15 SEK
-                # of correctly-attributed cost, against 26 GRID_CHARGING periods
-                # / 30.3 kWh where it overstates by 3.85 SEK -- and overstating
-                # makes the DP more reluctant to discharge, which forfeits
-                # margin rather than losing money. Making the split regime-aware
-                # (keying off `decision.strategic_intent`) is the real fix and a
-                # modelling decision in its own right, not a Phase 3 consolidation.
                 #
                 # Second known asymmetry: this can only push the basis UP.
                 # A grid counter that under-reads leaves a positive remainder
@@ -3471,13 +3519,32 @@ class BatterySystemManager:
                     logger.info("-" * 40)
                     for check in component["checks"]:
                         if check["status"] != "OK":
+                            # Two shapes are in live use across check_health()
+                            # implementations: name/entity_id/error (price_manager,
+                            # sensor_collector) and component/message (SPH/Huawei/
+                            # Solis controllers). Assuming the first crashed here
+                            # with KeyError('name') whenever a controller used the
+                            # second, and the outer except discarded the real
+                            # per-component result (#627). Detect the shape
+                            # explicitly and raise on neither, per rules.md's
+                            # ban on silent fallback.
+                            if "name" in check:
+                                label = check["name"]
+                                detail = check.get("error") or "No specific error"
+                            elif "component" in check:
+                                label = check["component"]
+                                detail = check.get("message") or "No specific error"
+                            else:
+                                raise ValueError(
+                                    f"Unrecognized health-check shape: {check!r}"
+                                )
                             entity_str = (
                                 f" ({check['entity_id']})"
                                 if check.get("entity_id")
                                 else ""
                             )
                             logger.info(
-                                f"  - {check['name']}{entity_str}: {check['status']} - {check['error'] or 'No specific error'}"
+                                f"  - {label}{entity_str}: {check['status']} - {detail}"
                             )
                     logger.info("-" * 40)
 
