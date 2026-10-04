@@ -297,7 +297,11 @@ presenting anything. Then the scope category: does the fix stay within
 the target method's existing contract (local), does it need a different/new
 owner (structural), or does it have multiple plausible owners worth a second
 opinion? State which, explicitly — don't let the user infer it from the diff
-description. A structural assessment with no stated reason for the chosen
+description. If the issue is a "the same fact is encoded in N places"
+inconsistency, the design must also name the **single declaration** the fact
+will live in and list every consumer that will derive from it; a design that
+patches one place to match another (a filter, a second list) is not ready to
+present (#794). A structural assessment with no stated reason for the chosen
 owner is not ready to present. Wait for explicit go-ahead before touching
 code. One message — cheap insurance against building an entire
 implementation on a wrong diagnosis *or* a wrong placement.
@@ -531,6 +535,21 @@ exit code. A green test suite is necessary, not sufficient — this step is
 what makes this skill worth running instead of the bot pipeline, and it is
 not satisfied by re-stating that `quality-check.sh` passed.
 
+**If the diff adds or changes an HA entity, service call, or REST endpoint
+the backend depends on** (a new sensor kind, a new `GET`/`POST` the
+`ha_api_controller` makes, a new entity-registry lookup), `scripts/mock_ha/server.py`
+almost certainly has no matching route or fixture — it only grows the
+endpoints someone has already needed. Extend it, and update or add a
+scenario in `scripts/mock_ha/scenarios/` so the new surface area has real
+data behind it, then drive that scenario here rather than only unit-testing
+the client code. This was found missing in practice (#782): a feature added
+an HA calendar read with no mock coverage, so neither this step nor the
+Stage 4 review caught a real bug in the settings-save path until someone
+exercised it by hand. Skip this only when the feature it depends on hasn't
+merged yet — building mock coverage against unmerged code can't be verified
+against anything real; say so explicitly and note it belongs with that
+feature's own PR instead.
+
 ### 9. Commit + draft PR
 
 Add a `CHANGELOG.md` entry under `## [Unreleased]` (create that heading at
@@ -630,6 +649,15 @@ go straight to executing Option 2, do not present its 3-option menu, body:
 - <expected_results on fixture X | intents/gate in the goldens | R == P via
   run_scenario_realized | none, because …>
 
+## Escape analysis
+<REQUIRED. Why did our process let this through? Not the code's root cause.>
+- Gate that failed: <no rule existed | rule existed but ignored/buried | analyst
+  misdiagnosed | test gap | review/self-check missed it>
+- Evidence: <the signal from the list below; for "ignored/buried", quote the rule
+  and its file:line — read the file, do not recall it>
+- Guard chosen: <mechanical check | skill-step change | prose rule | none, because …>
+- Budget: <rule replaced/merged/deleted | net +N lines, why | cap raised, why>
+
 Refs #<n>
 ```
 
@@ -652,6 +680,29 @@ in a terminal scrollback.
 If you cannot produce a mutation that reddens your test, you have not
 demonstrated the bug — say so in the PR and stop, rather than filling the
 section in with the suite result.
+
+**Escape analysis is fed evidence, not self-assessment.** Collect: what the
+Step 11 review caught (a finding your own checks missed is an escape), CI
+failures on this branch, whether the Step 3 diagnosis changed, and any point
+where the user corrected a process miss — if so, propose the guidance edit
+yourself, do not wait to be asked (#798 needed asking). Write it after Step 11
+so the verdict is evidence: open the PR with the section stubbed `pending
+Step 11`, then `gh pr edit` it before marking the PR ready.
+
+**Pick the first guard that fits:** (1) a mechanical check — test, lint,
+`quality-check.sh` rule, hook; (2) a skill-step change; (3) a prose rule. A
+prose rule needs a reason (1) and (2) cannot do it, a **generic** principle (no
+instance in the rule text; `(#NNN)` origin citation required), and a second
+documented escape of the same class (grep the `(#NNN)` citations in
+`docs/agents/`) or a mechanical guard it points at. One occurrence gets (1) or
+(2), not a rule.
+
+**No bloat.** Guidance edits go in their own commit. Prefer editing or merging
+a rule over appending, and delete any rule a test now enforces.
+`docs/agents/guidance-budget.txt` caps guidance file line counts and
+`quality-check.sh` fails above it; raising a cap is a visible diff the Stage 4
+reviewer must accept, reason in the Budget line. `none, because …` is a valid,
+common outcome — a bug no gate could reasonably have caught adds no guidance.
 
 ### 10. Watch this PR to green (and only this PR)
 
@@ -724,12 +775,15 @@ not carry them.** The bot posts its findings as INLINE review comments, which
 show up in neither `gh pr view --json reviews` nor `--json comments`. Read
 them directly, scoped to comments newer than the previous round's verdict so
 a re-run doesn't re-litigate findings already addressed (on the first round,
-omit the `select` — there is no prior verdict to filter against):
+omit the timestamp — there is no prior verdict to filter against):
 
 ```bash
-gh api repos/johanzander/bess-manager/pulls/<n>/comments \
-  --jq '.[] | select(.created_at > "<submittedAt from the round before>") | "\(.path):\(.line) \(.body)"'
+scripts/pr-status.sh <n> "<submittedAt from the round before>"
 ```
+
+The script prints the `== inline comments ==` section after the PR state and
+non-passing checks. Never inline `gh api` here: it is an ask rule and prompts
+every time, which stalls an unattended run.
 
 **Hard cap: 3 rounds.** On the third `CHANGES_REQUESTED`, stop reworking — a
 fourth round will not settle a design disagreement. The escalation itself is
@@ -762,57 +816,24 @@ report — and whoever acts on it — is what sets `Awaiting: maintainer`.
 
 ## After Merge
 
-A **separate, later invocation** — often a different session, sometimes days
-later once CI is green and the user has reviewed. Not part of the numbered
-flow above, which stops at a green, bot-approved, ready-for-review PR that
-the maintainer has not merged yet, per the Step 12 constraints.
+A **separate, later invocation** — often days later, after the maintainer has
+reviewed. Best-effort only: it depends on someone returning, so it reliably
+does not happen; Step 4's prune is the cleanup that actually runs.
 
-**Treat this as best-effort, not the cleanup mechanism.** Because it depends
-on someone returning after the merge, it reliably does not happen; Step 4's
-prune is the one that actually runs. If you are here, do it — but the safety
-net is upstream, not this section.
-
-1. Confirm the merge:
-
-   ```bash
-   gh pr view <n> --json state,mergedAt,mergeCommit
-   ```
-
-   `state == "MERGED"` is authoritative — that's the standard signal, no need
-   to separately diff branch content against `main`. Squash merges break
-   `git branch -d`'s normal ancestry check (the branch's commits never become
-   reachable from `main`), so force-delete below is expected, not a sign
-   something's wrong.
-
-2. Remove the worktree — via `ExitWorktree action=remove discard_changes=true`
-   if the session is still in it. That is the harness doing it, so it is not
-   sandboxed and it works.
-
-   If the session has already left, **emit one `!`-prefixed command that
-   removes the worktree and force-deletes the branch together**, in that
-   order — the branch delete has to ride the same deferred command: git
-   refuses `git branch -D` while the worktree registration persists, and the
-   command below is what clears the registration:
+1. `gh pr view <n> --json state,mergedAt,mergeCommit` — `state == "MERGED"` is
+   authoritative. Squash merges break `git branch -d`'s ancestry check, so the
+   force-delete below is expected, not a sign something is wrong.
+2. In the session that still holds the worktree: `ExitWorktree action=remove
+   discard_changes=true` (the harness does it, so it is not sandboxed), then
+   `git branch -D <branch-name>` and `git fetch origin --prune`.
+3. From any other session, **emit, do not execute**, one `!`-prefixed command.
+   The order is load-bearing: git refuses `branch -D` while the worktree
+   registration persists, and a sandboxed `git worktree remove` half-deletes
+   the tree (Step 4):
 
    ```bash
-   # Emit this; do not execute it. It must run unsandboxed.
    git worktree remove --force <path> && git branch -D <branch-name>
    ```
-
-   Running `git worktree remove` from a sandboxed Bash half-deletes the
-   worktree and then fails (see Step 4), so the agent must not run it either.
-
-3. In-session only — when item 2 completed via `ExitWorktree`, the
-   registration is gone and `git branch -D` is safe. Force-delete the local
-   branch and prune stale remote refs:
-
-   ```bash
-   git branch -D <branch-name>
-   git fetch origin --prune
-   ```
-
-   GitHub auto-deletes the remote branch on merge by default; `--prune` just
-   clears the now-stale local tracking ref.
 
 ## Rationalizations — Reality
 
@@ -849,6 +870,7 @@ net is upstream, not this section.
 | "the fix is small, docs don't need touching" | Small fixes are exactly what silently invalidates a one-line doc claim (a removed threshold, a renamed formula). Grep the two design docs before opening the PR, every time. |
 | "a unit test on the changed function is enough" | Not for DP/intent/control-mapping changes — a synthetic-input unit test can pass while the new branch is unreachable by any real optimizer-derived scenario. `docs/agents/simulator.md` requires `R == P` for exactly this class of change. |
 | "the existing suite still passes, so nothing broke" | Passing unchanged means the new code path may simply be untested, not unbroken — check whether any existing fixture actually reaches the new branch before treating a green suite as coverage. |
+| "the unit tests for the new HA client code pass, mock-HA coverage is extra" | Unit tests with stubbed responses can pass while the real endpoint is unreachable by the actual backend flow (Step 8, #782). |
 
 ## Red Flags — Stop and Go Back
 
@@ -884,6 +906,8 @@ net is upstream, not this section.
   `README.md`'s Features table and root `DOCS.md`'s Settings Page section.
 - About to write only a synthetic-input unit test for a DP/intent/control-
   mapping change instead of a plan-faithfulness (`R == P`) scenario test.
+- About to run Step 8 on a diff with new HA-facing surface area without the
+  mock-HA coverage check (Step 8, #782).
 - About to push the branch without having merged `origin/main` since Step 4.
 - About to stop at "draft PR opened" without watching CI settle (Step 10).
 - About to stop at "CI is green" without running the Step 11 review loop.

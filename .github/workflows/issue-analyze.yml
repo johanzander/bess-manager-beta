@@ -62,6 +62,13 @@ jobs:
         run: echo "at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
 
       - uses: anthropics/claude-code-action@v1
+        env:
+          # Sub-agents otherwise run in the background: the Agent call returns an
+          # acknowledgement, the orchestrator writes "still running, I'll wait" and
+          # the headless session ends with no comment posted (#788, run on #791).
+          # Disabling background tasks makes the bess-analyst delegation block
+          # until its report is in hand.
+          CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1"
         with:
           # Auth switch: BOT_AUTH=api_key uses the Anthropic API key (pay-per-token);
           # unset or 'oauth' uses Claude subscription credits. Change the repo variable
@@ -107,8 +114,12 @@ jobs:
                  - The issue title and body
                  - A summary of how the issue has evolved (what's resolved,
                    what the current problem is)
-                 - The LATEST debug bundle (from issue body or attachments —
-                   download it). If multiple bundles exist, use the most recent.
+                 - The LATEST debug bundle (from issue body, attachments, or
+                   a linked gist — download it: for a gist page URL fetch
+                   `<url>/raw`, for a gist raw URL fetch it directly, with
+                   `curl -sL`. Reporters put the ~2 MB export in a gist because
+                   it cannot fit in a comment; a gist link IS the debug log.
+                   Never report the log as missing without trying the link). If multiple bundles exist, use the most recent.
                  - This task: "Diagnose this issue independently. The reporter's
                    explanation is a HYPOTHESIS — do not assume it is correct.
 
@@ -236,6 +247,9 @@ jobs:
             - DO NOT open a PR.
             - DO NOT skip the bess-analyst delegation step — it's the whole
               point of this stage.
+            - The bess-analyst call is synchronous: do not end your turn, or
+              write that you are "waiting", until its full report is in your
+              context. A turn that ends without `gh issue comment` fails the run.
             - DO NOT end the run without having RUN `gh issue comment`. A
               diagnosis you only wrote out is a diagnosis nobody receives,
               and the job will fail the verification step below.
@@ -302,3 +316,50 @@ jobs:
           fi
 
           echo "✅ Analysis published: ${posted} new comment(s), labels: ${labels}"
+
+      # #788: the run logs of a silent exit contain no transcript
+      # (`show_full_output` is off and the action's log omits the final message),
+      # so what the agent did between "read issue" and "exit" -- whether it ever
+      # called the Agent tool for `bess-analyst`, and what that returned -- is
+      # unrecoverable after the fact. These two steps keep a reduced transcript
+      # ONLY for runs the verification step failed, so the root cause can be
+      # read from a real failure instead of guessed at.
+      #
+      # The action's execution file is the raw SDK message stream, unsanitised.
+      # Only the agent's text, its tool calls (name + input), tool-result sizes
+      # and, for failed tool calls, the first 300 chars of the error are kept.
+      # Tool-result bodies -- file contents, downloaded debug bundles -- are
+      # dropped: they are the bulk of the file and not what the question needs.
+      #
+      # `if: failure()` (not `always()`) scopes both steps: it is true only when
+      # an earlier step -- here the verification -- failed.
+      - name: Reduce the agent transcript of a failed run
+        if: failure()
+        env:
+          RAW: ${{ runner.temp }}/claude-execution-output.json
+          REDUCED: ${{ runner.temp }}/stage2-transcript-reduced.json
+        run: |
+          jq '[ .[]
+            | if .type == "assistant" then
+                {type, content: [ .message.content[]?
+                  | if .type == "tool_use" then {type, name, input}
+                    elif .type == "text" then {type, text}
+                    else {type} end ]}
+              elif .type == "user" then
+                {type, tool_results: [ .message.content[]?
+                  | select(.type? == "tool_result")
+                  | ((.content | tostring)) as $body
+                  | {tool_use_id, is_error, chars: ($body | length)}
+                    + (if .is_error == true then {error: $body[0:300]} else {} end) ]}
+              elif .type == "result" then
+                {type, subtype, is_error, num_turns, result}
+              else empty end ]' "$RAW" > "$REDUCED"
+
+      - name: Keep the reduced agent transcript of a failed run
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: stage2-agent-transcript-${{ github.run_id }}
+          path: ${{ runner.temp }}/stage2-transcript-reduced.json
+          if-no-files-found: warn
+          retention-days: 7

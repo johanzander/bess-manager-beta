@@ -1260,8 +1260,8 @@ class TestDiscoverSensorsFromRegistry:
         )
         assert platform == "solax_modbus_growatt_min"
         assert "solax_modbus_growatt_min" in sensors
-        # Base sensors (18) + TOU entities (9 slots x 5 = 45)
-        assert len(sensors["solax_modbus_growatt_min"]) == 63
+        # Base sensors (18) + TOU entities (1 slot x 5 = 5, #794)
+        assert len(sensors["solax_modbus_growatt_min"]) == 23
         assert (
             sensors["solax_modbus_growatt_min"]["battery_soc"]
             == "sensor.growatt_inverter_solax_battery_soc"
@@ -1846,6 +1846,43 @@ class TestDiscoverOctopusEntities:
             "importTomorrow": "event.octopus_energy_electricity_next_day_rates",
             "exportToday": "event.octopus_energy_electricity_export_current_day_rates",
             "exportTomorrow": "event.octopus_energy_electricity_export_next_day_rates",
+        }
+
+    def test_octoplus_power_up_calendar_discovered(self) -> None:
+        registry = [
+            *self._octopus_registry(),
+            _entity(
+                "calendar.octopus_energy_a_982b3d40_octoplus_power_up",
+                "octopus_energy",
+                "octopus_energy_A-982B3D40_octoplus_power_up",
+            ),
+            # Same platform and suffix family, but the event entity is not
+            # the calendar the overlay reads.
+            _entity(
+                "event.octopus_energy_a_982b3d40_octoplus_power_up_events",
+                "octopus_energy",
+                "octopus_energy_A-982B3D40_octoplus_power_up_events",
+            ),
+        ]
+        result = self.ctrl.discover_octopus_entities(registry)
+        assert (
+            result["powerUpCalendar"]
+            == "calendar.octopus_energy_a_982b3d40_octoplus_power_up"
+        )
+        assert "powerUpCalendarDisabledBy" not in result
+
+    def test_disabled_power_up_calendar_is_reported_as_disabled(self) -> None:
+        """The calendar ships disabled; the wizard must tell the user to enable it."""
+        entry = _entity(
+            "calendar.octopus_energy_a_982b3d40_octoplus_power_up",
+            "octopus_energy",
+            "octopus_energy_A-982B3D40_octoplus_power_up",
+        )
+        entry["disabled_by"] = "integration"
+        result = self.ctrl.discover_octopus_entities([entry])
+        assert result == {
+            "powerUpCalendar": "calendar.octopus_energy_a_982b3d40_octoplus_power_up",
+            "powerUpCalendarDisabledBy": "integration",
         }
 
     def test_empty_registry(self):
@@ -2568,4 +2605,34 @@ class TestHuaweiDiscovery:
         assert (
             huawei["battery_discharge_power"]
             == "sensor.huawei_battery_charge_discharge_power"
+        )
+
+
+class TestSolaxGrowattMinTouSlotsSingleSourceOfTruth:
+    """#794: which TOU slots GEN4 uses is declared once; everything derives from it."""
+
+    def test_suffix_map_declares_exactly_the_slots_the_product_controls(self) -> None:
+        from core.bess.ha_api_controller import SOLAX_GROWATT_MIN_TOU_SLOTS
+
+        tou_keys = {
+            v
+            for v in HomeAssistantAPIController.SOLAX_GROWATT_MIN_SUFFIX_MAP.values()
+            if v.startswith("tou_time_")
+        }
+        expected = {
+            f"tou_time_{n}_{field}"
+            for n in range(1, SOLAX_GROWATT_MIN_TOU_SLOTS + 1)
+            for field in ("enabled", "begin", "end", "mode", "update")
+        }
+        assert SOLAX_GROWATT_MIN_TOU_SLOTS == 1
+        assert tou_keys == expected
+
+    def test_health_check_requires_the_same_keys_as_the_map(self) -> None:
+        from core.bess.ha_api_controller import SOLAX_GROWATT_MIN_TOU_SUFFIXES
+        from core.bess.solax_modbus_growatt_controller import (
+            SolaxModbusGrowattController,
+        )
+
+        assert set(SolaxModbusGrowattController.TOU_REQUIRED_KEYS) == set(
+            SOLAX_GROWATT_MIN_TOU_SUFFIXES.values()
         )

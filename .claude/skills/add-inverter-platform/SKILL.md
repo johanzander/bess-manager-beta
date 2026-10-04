@@ -36,6 +36,14 @@ tests + docs for one implementation pass.
 A new inverter platform has **two** halves that must both be derived from the
 integration's real source, never inferred from a sample entity:
 
+**One fact, one declaration.** Capability facts about the platform — how many
+TOU slots it uses, which entity families it needs, which keys are required —
+are declared once (a module constant next to the suffix map) and the suffix
+map, the setup wizard's required-sensor list and the controller health check
+all derive from it. Never hand-list the same slots/keys in a second place or
+filter one list down in another (#794:
+`SOLAX_GROWATT_MIN_TOU_SLOTS`).
+
 ### 1. Place the inverter on the two control axes (do this first)
 
 **Before anything else**, locate the new inverter on the **two orthogonal axes**
@@ -74,7 +82,7 @@ survives entity renaming (`core/bess/ha_api_controller.py` →
 from the **integration's source code**, not from a sample `entity_id` and not
 from inference:
 
-1. Find the integration's GitHub repo (`gh api "search/repositories?q=..."`).
+1. Find the integration's GitHub repo (`gh search repos "<query>"`; read its files with `scripts/fetch-upstream-file.sh`, not inline `gh api`).
 2. Read `custom_components/<domain>/sensor.py` / `number.py` / `select.py` /
    `button.py` (and `const.py`, `coordinator.py`). Locate `DOMAIN` (= the
    registry `platform`), the `_attr_unique_id` construction, and the entity
