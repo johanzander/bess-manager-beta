@@ -11,7 +11,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - **Growatt GEN4 (solax_modbus) no longer maps unused TOU slots 2–9** — new setups only bind slot 1, ending the 404 error noise in debug exports. ([#794](https://github.com/johanzander/bess-manager/issues/794))
 - **An unavailable battery SOC sensor now fails with a clear error instead of a raw `TypeError`** — the log names the period and the sensor. ([#792](https://github.com/johanzander/bess-manager/issues/792))
 - **Settings: switching inverter Control Mode (TOU/VPP), Device ID or Service Domain on the Integrations tab now actually saves** — the Integrations tab's own Save button previously dropped these fields silently (stayed disabled, or appeared to save but reverted on reload). ([#787](https://github.com/johanzander/bess-manager/issues/787))
-- **A battery charged slightly above `maxSoc` no longer bricks the whole day's optimization** — when the inverter reads a hair above the configured ceiling (e.g. charges to 93% with `maxSoc` 90%), `optimize_battery_schedule` raised `initial_soe exceeds capacity` and produced no schedule, so the battery sat idle — and, unable to discharge back into range, stayed over-max and re-failed every cycle (observed: 69 consecutive failures across a full day, a peak-price evening wasted). The over-max case now clamps to `max_soe` and warns, symmetric with the existing below-min handling, letting the optimizer discharge the battery back within range.
 
 ### Changed
 
