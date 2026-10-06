@@ -4,6 +4,11 @@ All notable changes to BESS Battery Manager will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [11.1.0b2] - 2026-10-06
+
+### Added
+
+- **Peak-shaving: cap grid import during a configured window** — set a time window, weekdays and a max import power, and BESS suppresses grid-charging and discharges to cover load during that window, independent of spot price. Useful for capacity/demand tariffs. New: optionally map your meter's month-peak entity so the cap follows the month's highest import so far (Flemish capacity tariff); turn off "Only during a time window" to apply the cap around the clock. ([#96](https://github.com/johanzander/bess-manager/issues/96))
 ## [11.1.0b1] - 2026-10-04
 
 ### Fixed
@@ -40,6 +45,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ### Added
 
+- **Savings Report: Week view and per-period energy totals** — the report gains a **Week** resolution alongside Day/Month/Year, and each period now shows an **Energy** card with that period's home load, solar production, grid import, grid export and battery discharge — so you can zoom out and see both earnings and energy at a glance. Home consumption is now aggregated into the savings buckets (`homeConsumptionKwh`).
+- **Browse the Dashboard for earlier days** — the Dashboard gains a date selector with day-back/forward arrows so you can review how the system actually behaved on a past day (energy flows, schedule, SOC, and that day's cost & savings), the way the Growatt app lets you page back. Historical days are read from the persisted daily-view store. For a past day the System Overview shows just that day's Cost & Savings; the genuinely live widgets (real-time power/battery tiles, the "now" marker, tomorrow's plan) are today-only.
+- **Tell BESS what consumption is coming with Planned Consumption Changes** — declare an EV session or a skipped pool pump in a template sensor, and it applies on top of whichever consumption forecast you already use. ([#428](https://github.com/johanzander/bess-manager/issues/428))
 - **Savings Report: Week view and per-period energy totals** — the report gains a **Week** resolution alongside Day/Month/Year, and each period now shows an **Energy** card with that period's home load, solar production, grid import, grid export and battery discharge — so you can zoom out and see both earnings and energy at a glance. Home consumption is now aggregated into the savings buckets (`homeConsumptionKwh`). ([#753](https://github.com/johanzander/bess-manager/pull/753))
 - **Browse the Dashboard for earlier days** — the Dashboard gains a date selector with day-back/forward arrows so you can review how the system actually behaved on a past day (energy flows, schedule, SOC, and that day's cost & savings), the way the Growatt app lets you page back. Historical days are read from the persisted daily-view store. For a past day the System Overview shows just that day's Cost & Savings; the genuinely live widgets (real-time power/battery tiles, the "now" marker, tomorrow's plan) are today-only. ([#752](https://github.com/johanzander/bess-manager/pull/752))
 - **The dashboard Home Load curve now splits into residual and planned** — see which of the load is ordinary predicted usage and which is a known Planned Consumption Changes block (e.g. EV charging), with actual-vs-planned on elapsed periods. ([#749](https://github.com/johanzander/bess-manager/issues/749))
