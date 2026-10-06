@@ -4,30 +4,11 @@ All notable changes to BESS Battery Manager will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
-
-### Fixed
-
-- **Growatt GEN4 (solax_modbus) no longer maps unused TOU slots 2–9** — new setups only bind slot 1, ending the 404 error noise in debug exports. ([#794](https://github.com/johanzander/bess-manager/issues/794))
-
-### Changed
-
-- **Fewer Growatt cloud writes for the load-following discharge rate** — the discharge rate is recomputed every 15-min period and wobbles a few points (11% → 13% → 12%); previously every change was re-sent, and each write is exposed to the intermittent `GrowattV1ApiError` cloud rejections. Sub-threshold changes (< 5 percentage points) are now skipped, while the 0%/100% endpoints and the first departure from a stopped battery are always written exactly, so stops and small discharges are never missed. Extends the #402/#741 write-reduction work.
+## [11.1.0b2] - 2026-10-06
 
 ### Added
 
-- **Peak-shaving: cap grid import during a configured window** — set a time window, weekdays and a max import power, and BESS suppresses grid-charging and discharges to cover load during that window, independent of spot price. Useful for capacity/demand tariffs. Optionally map your meter's month-peak entity so the cap follows the month's highest import so far (Flemish capacity tariff); turn off "Only during a time window" to apply the cap around the clock. ([#96](https://github.com/johanzander/bess-manager/issues/96))
-- **Octopus free power windows are planned as free** — in Electricity Pricing settings, point BESS at the Octopus Energy integration's Octoplus power-up calendar (disabled by default in Home Assistant) and booked Weekend Happy Hours and Power Up sessions are priced at your "price during free windows" (default 0p) instead of the unchanged Agile rate. BESS then fills the battery in the window rather than paying earlier, and stops discharging to cover load that costs nothing; plan, dashboard and savings all use the free price. Bookings made during the day reach the plan within 15 minutes, and saving pricing settings now rebuilds the plan immediately. ([#762](https://github.com/johanzander/bess-manager/pull/762))
-### Removed
-
-- **Removed the unused `min_profit` price setting** — it was never read by the optimizer and only ever appeared as dead noise in settings/debug bundles. ([#773](https://github.com/johanzander/bess-manager/issues/773))
-
-### Fixed
-
-- **An unavailable battery SOC sensor now fails with a clear error instead of a raw `TypeError`** — the log names the period and the sensor. ([#792](https://github.com/johanzander/bess-manager/issues/792))
-- **Settings: switching inverter Control Mode (TOU/VPP), Device ID or Service Domain on the Integrations tab now actually saves** — the Integrations tab's own Save button previously dropped these fields silently (stayed disabled, or appeared to save but reverted on reload). ([#787](https://github.com/johanzander/bess-manager/issues/787))
-- **The battery's stored-energy cost basis no longer overstates the grid's share during deliberate grid charging** — during `GRID_CHARGING` periods the accounting now attributes concurrent solar to the battery first (matching the battery-first inverter topology), instead of assuming the home-first order that only holds for solar-surplus charging. ([#536](https://github.com/johanzander/bess-manager/issues/536))
-- **A battery charged slightly above `maxSoc` no longer bricks the whole day's optimization** — when the inverter reads a hair above the configured ceiling (e.g. charges to 93% with `maxSoc` 90%), `optimize_battery_schedule` raised `initial_soe exceeds capacity` and produced no schedule, so the battery sat idle — and, unable to discharge back into range, stayed over-max and re-failed every cycle (observed: 69 consecutive failures across a full day, a peak-price evening wasted). The over-max case now clamps to `max_soe` and warns, symmetric with the existing below-min handling, letting the optimizer discharge the battery back within range.
+- **Peak-shaving: cap grid import during a configured window** — set a time window, weekdays and a max import power, and BESS suppresses grid-charging and discharges to cover load during that window, independent of spot price. Useful for capacity/demand tariffs. New: optionally map your meter's month-peak entity so the cap follows the month's highest import so far (Flemish capacity tariff); turn off "Only during a time window" to apply the cap around the clock. ([#96](https://github.com/johanzander/bess-manager/issues/96))
 
 ## [11.0.0] - 2026-09-13
 
