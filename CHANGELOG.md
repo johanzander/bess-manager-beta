@@ -4,6 +4,12 @@ All notable changes to BESS Battery Manager will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [11.1.0b3] - 2026-10-07
+
+### Fixed
+
+- **Growatt VPP: no more needless grid import in near-idle periods** — when the plan only fell through to idle, the battery now covers load that arrives unexpectedly. ([#786](https://github.com/johanzander/bess-manager/issues/786))
+
 ## [11.1.0b2] - 2026-10-06
 
 ### Added
