@@ -413,6 +413,30 @@ async def patch_settings(updates: dict):
                         ),
                     )
 
+            if store_key == "energy_provider":
+                octopus_update = snake_data.get("octopus")
+                if isinstance(octopus_update, dict):
+                    export_kw = octopus_update.get("power_down_export_kw")
+                    if export_kw is not None and export_kw <= 0:
+                        raise HTTPException(
+                            status_code=422,
+                            detail=f"power_down_export_kw must be > 0, got {export_kw!r}",
+                        )
+                    export_minutes = octopus_update.get("power_down_export_minutes")
+                    if export_minutes is not None and export_minutes not in (
+                        15,
+                        30,
+                        45,
+                        60,
+                    ):
+                        raise HTTPException(
+                            status_code=422,
+                            detail=(
+                                "power_down_export_minutes must be one of "
+                                f"15, 30, 45, 60, got {export_minutes!r}"
+                            ),
+                        )
+
             # Read-modify-write: merge into the existing section.
             # Use deep merge so that partial updates to nested sub-dicts (e.g.
             # nordpool_official.config_entry_id) do not erase sibling keys.
@@ -1238,6 +1262,12 @@ async def get_inverter_status():
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
+def _planned_load_kwh(period_data: PeriodData) -> float:
+    """Net planned managed load (#428 overlay) of one period, 0.0 when none."""
+    breakdown = period_data.consumption_breakdown
+    return breakdown.planned if breakdown is not None else 0.0
+
+
 @router.get("/api/inverter/schedule")
 @router.get("/api/growatt/detailed_schedule")
 async def get_growatt_detailed_schedule():
@@ -1401,6 +1431,7 @@ async def get_growatt_detailed_schedule():
             today_soc_values: list[float | None] = []
             today_actions: list[float] = []
             today_curtailed: list[bool] = []
+            today_planned_loads: list[float] = []
             today_reconciled_intents: list[str] | None = None
             if bess_controller.system.schedule_store.get_latest_schedule():
                 today_period_count_local = get_period_count(time_utils.today())
@@ -1437,16 +1468,19 @@ async def get_growatt_detailed_schedule():
                             else planned_intent
                         )
                         today_curtailed.append(pd_today.decision.curtailed)
+                        today_planned_loads.append(_planned_load_kwh(pd_today))
                     else:
                         today_soc_values.append(None)
                         today_actions.append(0.0)
                         today_reconciled_intents.append(planned_intent)
                         today_curtailed.append(False)
+                        today_planned_loads.append(0.0)
             raw_groups = schedule_manager.get_detailed_period_groups(
                 intents=today_reconciled_intents,
                 actions=today_actions if today_actions else None,
                 soc_values=today_soc_values if today_soc_values else None,
                 curtailed=today_curtailed if today_curtailed else None,
+                planned_loads=today_planned_loads if today_planned_loads else None,
             )
             prev_soc: float | None = None
             for group in raw_groups:
@@ -1488,6 +1522,7 @@ async def get_growatt_detailed_schedule():
                         "soc_end_pct": soc_end,
                         "soc_delta_kwh": soc_delta_kwh,
                         "curtailed": group["curtailed"],
+                        "planned_load_kwh": group["planned_load_kwh"],
                     }
                 )
         except (ValueError, KeyError, AttributeError) as e:
@@ -1505,6 +1540,7 @@ async def get_growatt_detailed_schedule():
                 tomorrow_actions: list[float] = []
                 tomorrow_soc_values: list[float | None] = []
                 tomorrow_curtailed: list[bool] = []
+                tomorrow_planned_loads: list[float] = []
                 # Resolved by exact timestamp (not positional index -
                 # optimization_period) so a standalone next-day schedule
                 # (period_data[0] anchored to tomorrow 00:00 despite
@@ -1527,6 +1563,7 @@ async def get_growatt_detailed_schedule():
                             else None
                         )
                         tomorrow_curtailed.append(pd.decision.curtailed)
+                        tomorrow_planned_loads.append(_planned_load_kwh(pd))
                     else:
                         tomorrow_soc_values.append(None)
                         tomorrow_curtailed.append(False)
@@ -1536,6 +1573,7 @@ async def get_growatt_detailed_schedule():
                         actions=tomorrow_actions,
                         soc_values=tomorrow_soc_values,
                         curtailed=tomorrow_curtailed,
+                        planned_loads=tomorrow_planned_loads,
                     )
                     tomorrow_period_groups = []
                     prev_soc_tmr: float | None = None
@@ -1584,6 +1622,7 @@ async def get_growatt_detailed_schedule():
                                 "soc_end_pct": soc_end,
                                 "soc_delta_kwh": soc_delta_kwh_tmr,
                                 "curtailed": group["curtailed"],
+                                "planned_load_kwh": group["planned_load_kwh"],
                             }
                         )
         except (AttributeError, KeyError, ValueError) as e:
@@ -3323,22 +3362,27 @@ async def setup_complete(payload: APISetupCompletePayload):
                 ep["nordpool_hacs"] = {"entity": payload.nordpoolEntity}
             # Persist Octopus entity IDs when provider is octopus
             if payload.provider == "octopus" and payload.octopusImportTodayEntity:
-                from core.bess.settings import FREE_IMPORT_PRICE
+                from core.bess.settings_store import SettingsStore
 
-                ep["octopus"] = {
+                # Update only the fields the wizard collects: the Power Down
+                # settings live in the same section and must survive a wizard
+                # run. Defaults first, for an install that has never had an
+                # octopus section (the load-time migration only backfills keys
+                # into one that already exists).
+                octopus = {
+                    **SettingsStore._bootstrap_defaults()["energy_provider"]["octopus"],
+                    **ep.get("octopus", {}),
                     "import_today_entity": payload.octopusImportTodayEntity,
                     "import_tomorrow_entity": payload.octopusImportTomorrowEntity,
                     "export_today_entity": payload.octopusExportTodayEntity,
                     "export_tomorrow_entity": payload.octopusExportTomorrowEntity,
-                    "free_import_price": (
-                        payload.octopusFreeImportPrice
-                        if payload.octopusFreeImportPrice is not None
-                        else FREE_IMPORT_PRICE
-                    ),
                     "power_up_calendar_entity": (
                         payload.octopusPowerUpCalendarEntity or ""
                     ),
                 }
+                if payload.octopusFreeImportPrice is not None:
+                    octopus["free_import_price"] = payload.octopusFreeImportPrice
+                ep["octopus"] = octopus
             # Persist ENTSO-e entity when provider is entsoe
             if payload.provider == "entsoe" and payload.entsoeEntity:
                 ep["entsoe"] = {"entity": payload.entsoeEntity}

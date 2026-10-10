@@ -146,6 +146,14 @@ def _scenario_inputs(scenario: dict):
         inputs["peak_shaving_import_cap_per_period"] = scenario[
             "peak_shaving_import_cap_per_period"
         ]
+    if "min_grid_export_kwh_per_period" in scenario:
+        inputs["min_grid_export_kwh_per_period"] = scenario[
+            "min_grid_export_kwh_per_period"
+        ]
+    if "session_import_cap_kwh_per_period" in scenario:
+        inputs["session_import_cap_kwh_per_period"] = scenario[
+            "session_import_cap_kwh_per_period"
+        ]
     return inputs
 
 
@@ -205,6 +213,7 @@ def run_scenario_realized(scenario: dict) -> tuple:
             pd.decision.battery_action / dt,
             settings,
             intra_period_discharge_allowed=pd.decision.intra_period_discharge_allowed,
+            planned_grid_imported_kwh=pd.energy.grid_imported,
         )
         for pd in result.period_data
     ]
@@ -222,6 +231,9 @@ def run_scenario_realized(scenario: dict) -> tuple:
             inp.get("peak_shaving_import_cap_per_period"),
             len(commands),
             dt,
+            session_import_cap_kwh_per_period=inp.get(
+                "session_import_cap_kwh_per_period"
+            ),
         ),
     )
     return result, sim.realized_cost

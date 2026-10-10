@@ -4,6 +4,17 @@ All notable changes to BESS Battery Manager will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [11.1.0b4] - 2026-10-10
+
+### Fixed
+
+- **Growatt TOU/cloud: no more needless grid import in near-idle periods** — a near-balanced period now lets the battery cover unexpected load, like the other intents. ([#811](https://github.com/johanzander/bess-manager/issues/811))
+
+### Added
+
+- **Planned Schedule shows planned managed load** — quarters carrying a Planned Consumption Changes block (e.g. an EV session) now show a "+3.00 kWh planned load" chip on the Inverter page. ([#813](https://github.com/johanzander/bess-manager/issues/813))
+- **Octopus Power Down sessions can export a short pulse** — opt-in under Electricity Pricing (Octopus). During each joined Power Down session BESS exports at least your chosen power for your chosen duration (default 1 kW for 15 minutes) at the start of the session and plans no grid import for the rest of it, so the meter reads net export; a missed slot rolls over to the next. Each session's planned vs realized import/export and its Octopoints are recorded in the daily history and debug bundle. Off by default: whether exporting helps a session score is not yet established. ([#770](https://github.com/johanzander/bess-manager/pull/770))
+
 ## [11.1.0b3] - 2026-10-07
 
 ### Fixed
