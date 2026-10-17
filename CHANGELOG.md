@@ -4,6 +4,12 @@ All notable changes to BESS Battery Manager will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [11.1.0b5] - 2026-10-17
+
+### Fixed
+
+- **Fuse protection no longer swings grid charging between 0% and 100%** — it now excludes the battery's own draw from house load and checks every minute. ([#816](https://github.com/johanzander/bess-manager/issues/816))
+
 ## [11.1.0b4] - 2026-10-10
 
 ### Fixed
