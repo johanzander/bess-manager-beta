@@ -4,6 +4,13 @@ All notable changes to BESS Battery Manager will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [11.1.0b6] - 2026-10-19
+
+### Fixed
+
+- **Huawei: Home Usage no longer goes negative while grid-charging** — inverter active power is no longer auto-mapped as household load, and the field is now labelled "Household Load Power". Existing Huawei installs that mapped it should clear or replace it in Settings. ([#818](https://github.com/johanzander/bess-manager/issues/818))
+- **Huawei: grid power sign is configurable** — Settings → Integrations → Huawei has a new "Grid power is import-positive" switch for sensors, such as an EMMA feed-in sensor, that read positive while importing. ([#818](https://github.com/johanzander/bess-manager/issues/818))
+
 ## [11.1.0b5] - 2026-10-17
 
 ### Fixed
