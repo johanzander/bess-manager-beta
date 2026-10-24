@@ -83,6 +83,8 @@ from .solis_modbus_controller import SolisModbusController
 from .strategic_intent import discharge_ceiling_lifts, idle_hold_releasable
 from .terminal_value import TerminalValueCurve, calculate_terminal_curve
 from .time_utils import (
+    PERIODS_PER_DAY_NORMAL,
+    expand_wall_clock_profile,
     format_period,
     get_period_count,
     period_index_to_timestamp,
@@ -1311,7 +1313,7 @@ class BatterySystemManager:
                 logger.warning("Cannot fetch predictions: controller is not available")
                 return
 
-            consumption_predictions = self._get_consumption_forecast()
+            consumption_predictions = self._get_consumption_profile()
 
             # Store the predictions (this was missing!)
             if consumption_predictions:
@@ -1454,26 +1456,31 @@ class BatterySystemManager:
 
         Returns:
             The composed forecast, or the input unchanged when no overlay
-            entity is configured.
+            entity is configured or its blocks are malformed (the latter is
+            recorded as a runtime failure).
 
         """
         try:
             blocks = self.controller.get_consumption_overlay_blocks()
         except ConsumptionOverlayError as e:
-            # The error still propagates — no silent fallback. Recording it
-            # first is what puts it on the dashboard: the caller's blanket
-            # handler logs and returns False, which on its own leaves the
-            # schedule frozen at the last good one with no user-visible signal.
-            logger.error("Planned consumption changes are unusable: %s", e)
+            # Not a silent fallback: the failure goes on the dashboard and the
+            # log at ERROR, so the user knows their declared changes are being
+            # ignored. Raising instead would let one bad render of an external
+            # feed (e.g. a heat-pump planner) freeze battery planning at the
+            # last good schedule.
+            logger.error(
+                "Planned consumption changes are unusable, planning without them: %s",
+                e,
+            )
             self._runtime_failure_tracker.record_failure_once(
                 category="CONSUMPTION_OVERLAY",
                 operation=(
                     "Planned consumption changes entity could not be read — "
-                    "optimization is blocked until the template is fixed"
+                    "they are being ignored until the template is fixed"
                 ),
                 error=e,
             )
-            raise
+            return consumption_predictions
         self._runtime_failure_tracker.dismiss_by_category("CONSUMPTION_OVERLAY")
 
         if not blocks:
@@ -1673,14 +1680,22 @@ class BatterySystemManager:
             return None, None
         return export_targets, session_import_caps
 
-    def _get_consumption_forecast(self) -> list[float]:
-        """Get consumption forecast based on the configured strategy.
+    def _get_consumption_forecast(self, target_date: date) -> list[float]:
+        """The configured strategy's consumption forecast for ``target_date``.
+
+        One entry per real period of that day (92, 96 or 100), kWh each.
+        """
+        return expand_wall_clock_profile(self._get_consumption_profile(), target_date)
+
+    def _get_consumption_profile(self) -> list[float]:
+        """Get the consumption profile of a wall-clock day for the configured strategy.
 
         Dispatches to the appropriate data source based on
-        home_settings.consumption_strategy.
+        home_settings.consumption_strategy. The profile is a shape, not a
+        particular day: ``_get_consumption_forecast`` lays it over a real day.
 
         Returns:
-            List of 96 float values (kWh per 15-minute period).
+            List of 96 float values (kWh per 15-minute wall-clock quarter-hour).
         """
         strategy = self.home_settings.consumption_strategy
 
@@ -1689,7 +1704,7 @@ class BatterySystemManager:
 
         if strategy == "fixed":
             quarterly = self.home_settings.default_hourly / 4.0
-            return [quarterly] * 96
+            return [quarterly] * PERIODS_PER_DAY_NORMAL
 
         if strategy == "load_power_7d_avg":
             return self._get_load_power_7d_avg_forecast()
@@ -1725,7 +1740,7 @@ class BatterySystemManager:
                         ),
                         error=e,
                     )
-                return [quarterly] * 96
+                return [quarterly] * PERIODS_PER_DAY_NORMAL
 
         raise ValueError(f"Unknown consumption_strategy: '{strategy}'")
 
@@ -2025,7 +2040,7 @@ class BatterySystemManager:
 
         When prepare_next_day=False, attempts to extend today's prices with
         tomorrow's data for improved end-of-day optimization. The extended
-        horizon is capped at 192 periods (2 days).
+        horizon is capped at today's + tomorrow's period count (2 days).
         """
         # Cache-only reads: the quarterly cycle must never fetch prices on the
         # scheduler thread (#709). The cache is kept warm by the dedicated
@@ -2051,10 +2066,14 @@ class BatterySystemManager:
                 logger.warning("No prices available")
                 return None, None
 
-            # Cap at 192 periods (2 days maximum)
-            if len(price_entries) > 192:
-                price_entries = price_entries[:192]
-                logger.info("Capped price entries at 192 periods (2 days)")
+            # Cap at two calendar days. A day is 92, 96 or 100 periods, so the
+            # cap follows the real day lengths instead of a literal 192 (#832).
+            max_periods = get_period_count(time_utils.today()) + get_period_count(
+                time_utils.today() + timedelta(days=1)
+            )
+            if len(price_entries) > max_periods:
+                price_entries = price_entries[:max_periods]
+                logger.info("Capped price entries at %d periods (2 days)", max_periods)
 
             prices = [entry["price"] for entry in price_entries]
 
@@ -2366,8 +2385,9 @@ class BatterySystemManager:
                 break
             plan_schedule = schedule
 
+        # Keyed by instant: wall-clock equality merges the repeated DST hour.
         period_data_by_timestamp = {
-            pd.timestamp: pd
+            pd.timestamp.astimezone(UTC): pd
             for pd in plan_schedule.optimization_result.period_data
             if pd.timestamp is not None
         }
@@ -2375,7 +2395,7 @@ class BatterySystemManager:
         planned_export = 0.0
         for p in range(start_period, end_period):
             period_data = period_data_by_timestamp.get(
-                time_utils.period_index_to_timestamp(p)
+                time_utils.period_index_to_timestamp(p).astimezone(UTC)
             )
             if period_data is not None:
                 planned_import += period_data.energy.grid_imported
@@ -2515,11 +2535,16 @@ class BatterySystemManager:
             return None
 
     def _fetch_tomorrow_solar_forecast(self) -> list[float]:
-        """Fetch tomorrow's solar forecast, falling back to zeros if unavailable."""
+        """Fetch tomorrow's solar forecast, falling back to zeros if unavailable.
+
+        One entry per real period of tomorrow (92, 96 or 100).
+        """
+        tomorrow_date = time_utils.today() + timedelta(days=1)
         try:
-            return self.controller.get_solar_forecast_tomorrow()
+            return expand_wall_clock_profile(
+                self.controller.get_solar_forecast_tomorrow(), tomorrow_date
+            )
         except SystemConfigurationError:
-            tomorrow_date = date.today() + timedelta(days=1)
             forecast = [0.0] * get_period_count(tomorrow_date)
             logger.warning(
                 "Tomorrow's solar forecast unavailable (no solar sensor configured), using zeros"
@@ -2559,51 +2584,54 @@ class BatterySystemManager:
                 self._consumption_predictions is not None
                 and self._consumption_predictions_date == time_utils.today()
             ):
-                consumption_predictions = self._consumption_predictions
+                consumption_profile = self._consumption_predictions
             else:
-                consumption_predictions = self._get_consumption_forecast()
-                self._consumption_predictions = consumption_predictions
+                consumption_profile = self._get_consumption_profile()
+                self._consumption_predictions = consumption_profile
                 self._consumption_predictions_date = time_utils.today()
         else:
-            consumption_predictions = self._get_consumption_forecast()
+            consumption_profile = self._get_consumption_profile()
+
+        # Index 0 of the horizon is the first day's midnight; each day's slice is
+        # sized by that day's real period count (92, 96 or 100).
+        first_day = time_utils.today() + timedelta(days=1 if prepare_next_day else 0)
+        consumption_predictions = expand_wall_clock_profile(
+            consumption_profile, first_day
+        )
 
         if prepare_next_day:
             # The next-day schedule must be built from tomorrow's solar forecast, not today's.
             solar_predictions = self._fetch_tomorrow_solar_forecast()
         else:
-            solar_predictions = self.controller.get_solar_forecast()
+            solar_predictions = expand_wall_clock_profile(
+                self.controller.get_solar_forecast(), first_day
+            )
 
         # --- Extend arrays to match period_count when horizon spans tomorrow ---
         if period_count > len(consumption_predictions):
-            # Consumption: repeat today's uniform pattern for tomorrow
-            tomorrow_consumption = consumption_predictions.copy()
-            consumption_predictions = consumption_predictions + tomorrow_consumption
+            # Consumption: the same wall-clock pattern laid over the following
+            # day's real periods, so a 96+100 DST horizon is 196 long (#832, #689).
+            consumption_predictions = consumption_predictions + (
+                expand_wall_clock_profile(
+                    consumption_profile, first_day + timedelta(days=1)
+                )
+            )
             logger.info(
                 "Extended consumption predictions to %d periods for tomorrow horizon",
                 len(consumption_predictions),
             )
 
-        if period_count > len(solar_predictions):
-            if prepare_next_day:
-                # prepare_next_day already fetched tomorrow's forecast.
-                # Extra periods are the DST fall-back hour (overnight → zero solar).
-                extra = period_count - len(solar_predictions)
-                solar_predictions = solar_predictions + [0.0] * extra
-                logger.info(
-                    "Extended solar predictions with %d zeros for DST fall-back extra periods",
-                    extra,
-                )
-            else:
-                # Extended horizon: fetch tomorrow's actual solar forecast for better optimization.
-                tomorrow_solar = self._fetch_tomorrow_solar_forecast()
-                logger.info(
-                    "Extended solar predictions with tomorrow's forecast (%d periods)",
-                    len(tomorrow_solar),
-                )
-                solar_predictions = solar_predictions + tomorrow_solar
+        if period_count > len(solar_predictions) and not prepare_next_day:
+            # Extended horizon: fetch tomorrow's actual solar forecast for better optimization.
+            tomorrow_solar = self._fetch_tomorrow_solar_forecast()
+            logger.info(
+                "Extended solar predictions with tomorrow's forecast (%d periods)",
+                len(tomorrow_solar),
+            )
+            solar_predictions = solar_predictions + tomorrow_solar
 
         # --- Apply the user's planned consumption changes (issue #428) ---
-        # Deliberately here, not inside _get_consumption_forecast: after the
+        # Deliberately here, not inside _get_consumption_profile: after the
         # daily prediction cache, so editing the overlay takes effect on the
         # next run rather than tomorrow; and after the extension above, so a
         # block declared for tomorrow lands on tomorrow instead of today's
@@ -2784,7 +2812,7 @@ class BatterySystemManager:
         curve = calculate_terminal_curve(
             buy_prices,
             cap_sell_prices,
-            self._get_consumption_forecast(),
+            self._get_consumption_forecast(time_utils.today() + timedelta(days=1)),
             self._fetch_tomorrow_solar_forecast(),
             self.battery_settings,
         )
@@ -2997,11 +3025,20 @@ class BatterySystemManager:
             # is the only day present, so this is identical to sell_prices.
             # Still needed after #602: the cap governs the no-PV regime, which
             # is where the concave row's knee cannot bind.
-            terminal_date = remaining_entries[-1]["timestamp"][:10]
+            # The terminal day is located by position, not by timestamp label:
+            # labels are naive wall clock, so on a 100-period day the last four
+            # roll over onto the next date (#832).
+            today_period_count = get_period_count(time_utils.today())
+            terminal_day_start = (
+                today_period_count
+                if not prepare_next_day and len(price_entries) > today_period_count
+                else 0
+            )
             cap_sell_prices = [
                 entry["sellPrice"]
-                for entry in remaining_entries
-                if entry["timestamp"][:10] == terminal_date
+                for entry in price_entries[
+                    max(terminal_day_start, optimization_period) :
+                ]
             ]
 
             # Terminal valuation for end-of-horizon energy.
@@ -3256,7 +3293,7 @@ class BatterySystemManager:
             )
 
             # Truncate all arrays to today's period count before creating DPSchedule.
-            # The optimizer may have used an extended horizon (up to 192 periods) to make
+            # The optimizer may have used an extended horizon (two days) to make
             # better decisions for today, but DPSchedule and InverterController are
             # day-centric and the Growatt inverter has no date awareness in TOU segments.
             if not prepare_next_day:
@@ -3280,7 +3317,7 @@ class BatterySystemManager:
 
             # Recalculate EconomicSummary scoped to today only.
             # The DP algorithm computes economic_summary over the full extended horizon
-            # (up to 192 periods), which inflates profitability gate and prediction snapshots.
+            # (two days), which inflates profitability gate and prediction snapshots.
             if not prepare_next_day:
                 today_period_count = get_period_count(time_utils.today())
                 today_result_count = today_period_count - optimization_period

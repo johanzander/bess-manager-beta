@@ -247,7 +247,7 @@ def test_parse_rejects_a_naive_timestamp() -> None:
 #
 # The overlay applies in _gather_optimization_data, after the daily prediction
 # cache and after the tomorrow-horizon extension. Applying it earlier -- inside
-# _get_consumption_forecast -- would bake it into the cached array (so editing
+# _get_consumption_profile -- would bake it into the cached array (so editing
 # the overlay mid-day would do nothing until tomorrow) and would let the
 # extension duplicate today's blocks onto tomorrow. These tests pin the seam,
 # not just the arithmetic.
@@ -366,7 +366,7 @@ def test_editing_the_overlay_takes_effect_without_waiting_for_tomorrow(
     'ha_statistics' and 'load_power_7d_avg' average whole calendar days, so
     their forecast is cached until the date rolls over. The overlay is not
     that kind of value: the user edits it precisely because today changed.
-    Applying it inside _get_consumption_forecast would trap it in that cache.
+    Applying it inside _get_consumption_profile would trap it in that cache.
     """
     system = system_with_overlay
     system.home_settings.consumption_strategy = "ha_statistics"
@@ -485,15 +485,14 @@ def test_apply_overlay_delivers_full_energy_across_the_dst_fall_back_hour() -> N
     assert all(v == pytest.approx(1.0) for v in covered)
 
 
-def test_a_malformed_overlay_is_recorded_as_a_runtime_failure(
+def test_a_malformed_overlay_keeps_planning_on_the_base_forecast_and_is_recorded(
     system_with_overlay: BatterySystemManager,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A broken template must reach the dashboard, not just the log.
+    """One bad render must not stop battery planning, but must not be silent.
 
-    The error propagates into update_battery_schedule's blanket handler, which
-    logs and returns False. Without a recorded failure the schedule silently
-    freezes at the last good one and the user has no signal at all.
+    The optimizer receives the unmodified base forecast, and the failure is on
+    the dashboard so the user knows their declared changes are being ignored.
     """
     system = system_with_overlay
     period_count = time_utils.get_period_count(time_utils.today())
@@ -503,15 +502,52 @@ def test_a_malformed_overlay_is_recorded_as_a_runtime_failure(
 
     monkeypatch.setattr(system.controller, "get_consumption_overlay_blocks", _raise)
 
-    with pytest.raises(ConsumptionOverlayError):
-        system._gather_optimization_data(
-            period=0,
-            current_soc=50.0,
-            prepare_next_day=False,
-            period_count=period_count,
-        )
+    result = system._gather_optimization_data(
+        period=0, current_soc=50.0, prepare_next_day=False, period_count=period_count
+    )
+    assert result is not None
+    _, data = result
 
+    assert data["full_consumption"] == pytest.approx([0.25] * period_count)
     assert system._runtime_failure_tracker.has_active_failure("CONSUMPTION_OVERLAY")
+
+
+def test_a_good_read_after_a_malformed_overlay_dismisses_the_failure(
+    system_with_overlay: BatterySystemManager,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Fixing the template clears the banner and the overlay applies again."""
+    system = system_with_overlay
+    period_count = time_utils.get_period_count(time_utils.today())
+    block = OverlayBlock(
+        start=time_utils.period_index_to_timestamp(88),
+        end=time_utils.period_index_to_timestamp(92),
+        energy_kwh=4.0,
+        mode="add",
+    )
+    template_is_broken = True
+
+    def _read() -> list[OverlayBlock]:
+        if template_is_broken:
+            raise ConsumptionOverlayError("overlay block 0: unknown mode 'replace'")
+        return [block]
+
+    monkeypatch.setattr(system.controller, "get_consumption_overlay_blocks", _read)
+
+    system._gather_optimization_data(
+        period=0, current_soc=50.0, prepare_next_day=False, period_count=period_count
+    )
+    assert system._runtime_failure_tracker.has_active_failure("CONSUMPTION_OVERLAY")
+
+    template_is_broken = False
+    result = system._gather_optimization_data(
+        period=0, current_soc=50.0, prepare_next_day=False, period_count=period_count
+    )
+    assert result is not None
+    _, data = result
+
+    assert not system._runtime_failure_tracker.has_active_failure("CONSUMPTION_OVERLAY")
+    assert data["full_consumption"][88:92] == pytest.approx([1.25] * 4)
 
 
 def test_removing_the_offending_block_clears_the_clamp_warning(

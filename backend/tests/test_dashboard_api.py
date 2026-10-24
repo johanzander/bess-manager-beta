@@ -7,7 +7,7 @@ in _aggregate_quarterly_to_hourly.
 
 import sys
 from dataclasses import replace
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from unittest.mock import MagicMock
 
 import pytest
@@ -18,9 +18,12 @@ from fastapi.testclient import TestClient
 
 from core.bess import time_utils
 from core.bess.battery_system_manager import BatterySystemManager
+from core.bess.calendar_windows import CalendarWindow
 from core.bess.daily_view_builder import DailyView
 from core.bess.exceptions import SystemConfigurationError
+from core.bess.free_import_overlay import apply_free_import_windows
 from core.bess.models import DecisionData, EconomicData, EnergyData, PeriodData
+from core.bess.settings import BatterySettings
 
 _test_app = FastAPI()
 _test_app.include_router(router)
@@ -111,9 +114,13 @@ def _wire_schedule_store(
     mock_schedule.optimization_period = optimization_period
     mock_schedule.optimization_result.period_data = period_data
     ctrl.system.schedule_store.get_latest_schedule.return_value = mock_schedule
-    by_timestamp = {p.timestamp: p for p in period_data}
+    # Keyed by instant like the real ScheduleStore: aware datetimes sharing a
+    # ZoneInfo compare equal across the repeated DST fall-back hour.
+    by_timestamp = {
+        p.timestamp.astimezone(UTC): p for p in period_data if p.timestamp is not None
+    }
     ctrl.system.schedule_store.get_period_data_at.side_effect = (
-        lambda ts: by_timestamp.get(ts)
+        lambda ts: by_timestamp.get(ts.astimezone(UTC))
     )
 
 
@@ -135,7 +142,9 @@ def _make_started_controller() -> MagicMock:
     _wire_schedule_store(ctrl, period_data=[])
 
     ctrl.system.get_current_daily_view.return_value = _make_daily_view()
-    ctrl.system.get_settings.return_value = {"battery": MagicMock(total_capacity=30.0)}
+    ctrl.system.get_settings.return_value = {
+        "battery": BatterySettings(total_capacity=30.0)
+    }
     ctrl.system.home_settings.currency = "SEK"
 
     sm = ctrl.system._inverter_controller
@@ -289,15 +298,20 @@ class TestDashboardFullHorizonCost:
         ctrl = _make_started_controller()
 
         today = time_utils.today()
+        tomorrow = today + timedelta(days=1)
+        # Real day lengths: tomorrow can be a 92/100-period DST day.
+        today_count = time_utils.get_period_count(today)
+        tomorrow_count = time_utils.get_period_count(tomorrow)
         period_data = [
-            _make_period_with_costs(i, today, grid_cost=0.0, grid_only_cost=0.5)
-            for i in range(96)
+            _make_period_with_costs(0, today, grid_cost=0.0, grid_only_cost=0.5)
+            for _ in range(today_count)
         ] + [
-            _make_period_with_costs(
-                i - 96, today + timedelta(days=1), grid_cost=0.1, grid_only_cost=0.2
-            )
-            for i in range(96, 192)
+            _make_period_with_costs(0, tomorrow, grid_cost=0.1, grid_only_cost=0.2)
+            for _ in range(tomorrow_count)
         ]
+        for index, period in enumerate(period_data):
+            period.period = index
+            period.timestamp = time_utils.period_index_to_timestamp(index)
         _wire_schedule_store(ctrl, period_data)
 
         sys.modules["app"].bess_controller = ctrl
@@ -306,10 +320,139 @@ class TestDashboardFullHorizonCost:
         assert resp.status_code == 200
         summary = resp.json()["summary"]
         assert summary["horizonDays"] == 2
-        # today: 96 periods * (grid_cost=0.0, grid_only_cost=0.5) -> netGrid=0.0, gridOnly=48.0
-        # tomorrow: 96 periods * (grid_cost=0.1, grid_only_cost=0.2) -> netGrid=9.6, gridOnly=19.2
-        assert summary["netGridCostFullHorizon"]["value"] == pytest.approx(9.6)
-        assert summary["netSavingsFullHorizon"]["value"] == pytest.approx(57.6)
+        # today: grid_cost=0.0, grid_only_cost=0.5 per period
+        # tomorrow: grid_cost=0.1, grid_only_cost=0.2 per period
+        net_grid = 0.1 * tomorrow_count
+        grid_only = 0.5 * today_count + 0.2 * tomorrow_count
+        assert summary["netGridCostFullHorizon"]["value"] == pytest.approx(net_grid)
+        assert summary["netSavingsFullHorizon"]["value"] == pytest.approx(
+            grid_only - net_grid
+        )
+
+
+class TestDashboardShadowPrice:
+    """Each planned period exposes the plan's value of stored energy, so an
+    external flexible load can price its consumption against the battery plan.
+    A value the DP never computed must read as absent, never as free energy.
+    """
+
+    _RESERVE_FLOOR_KWH = BatterySettings(total_capacity=30.0).min_soe_kwh
+
+    @staticmethod
+    def _period(
+        period: int,
+        *,
+        day: date = date(2025, 7, 13),
+        data_source: str = "predicted",
+        soe_start: float = 15.0,
+        shadow_price: float = 0.42,
+    ) -> PeriodData:
+        base = _make_period(period)
+        return replace(
+            base,
+            timestamp=datetime.combine(
+                day,
+                datetime.min.time().replace(hour=period // 4, minute=(period % 4) * 15),
+                tzinfo=time_utils.TIMEZONE,
+            ),
+            data_source=data_source,
+            energy=replace(base.energy, battery_soe_start=soe_start),
+            decision=replace(base.decision, shadow_price=shadow_price),
+        )
+
+    @staticmethod
+    def _controller_with_today(periods: list[PeriodData]) -> MagicMock:
+        ctrl = _make_started_controller()
+        ctrl.system.get_current_daily_view.return_value = DailyView(
+            date=date(2025, 7, 13),
+            periods=periods,
+            total_savings=0.0,
+            actual_count=sum(1 for p in periods if p.data_source == "actual"),
+            predicted_count=sum(1 for p in periods if p.data_source == "predicted"),
+        )
+        return ctrl
+
+    def test_planned_period_reports_the_plans_shadow_price(self) -> None:
+        sys.modules["app"].bess_controller = self._controller_with_today(  # type: ignore[attr-defined]
+            [self._period(i) for i in range(96)]
+        )
+
+        resp = _client.get("/api/dashboard")
+
+        assert resp.status_code == 200
+        assert resp.json()["hourlyData"][10]["shadowPrice"]["value"] == (
+            pytest.approx(0.42)
+        )
+
+    def test_elapsed_period_has_no_shadow_price(self) -> None:
+        periods = [self._period(0, data_source="actual", shadow_price=0.0)] + [
+            self._period(i) for i in range(1, 96)
+        ]
+        sys.modules["app"].bess_controller = self._controller_with_today(periods)  # type: ignore[attr-defined]
+
+        hourly_data = _client.get("/api/dashboard").json()["hourlyData"]
+
+        assert hourly_data[0]["shadowPrice"] is None
+        assert hourly_data[1]["shadowPrice"]["value"] == pytest.approx(0.42)
+
+    def test_period_starting_at_reserve_floor_has_no_shadow_price(self) -> None:
+        periods = [
+            self._period(0, soe_start=self._RESERVE_FLOOR_KWH, shadow_price=0.0)
+        ] + [self._period(i) for i in range(1, 96)]
+        sys.modules["app"].bess_controller = self._controller_with_today(periods)  # type: ignore[attr-defined]
+
+        hourly_data = _client.get("/api/dashboard").json()["hourlyData"]
+
+        assert hourly_data[0]["shadowPrice"] is None
+        assert hourly_data[1]["shadowPrice"]["value"] == pytest.approx(0.42)
+
+    def test_hourly_averages_the_quarters_that_have_a_shadow_price(self) -> None:
+        periods = [
+            self._period(0, data_source="actual", shadow_price=0.0),
+            self._period(1, shadow_price=0.4),
+            self._period(2, shadow_price=0.6),
+            self._period(3, shadow_price=0.8),
+            *(self._period(i, data_source="actual") for i in range(4, 8)),
+            *(self._period(i) for i in range(8, 96)),
+        ]
+        sys.modules["app"].bess_controller = self._controller_with_today(periods)  # type: ignore[attr-defined]
+
+        hourly_data = _client.get("/api/dashboard?resolution=hourly").json()[
+            "hourlyData"
+        ]
+
+        assert hourly_data[0]["shadowPrice"]["value"] == pytest.approx(0.6)
+        assert hourly_data[1]["shadowPrice"] is None
+
+    def test_tomorrow_periods_report_the_plans_shadow_price(self) -> None:
+        today = time_utils.today()
+        tomorrow = today + timedelta(days=1)
+        ctrl = _make_started_controller()
+        _wire_schedule_store(
+            ctrl,
+            [self._period(i, day=today) for i in range(96)]
+            + [self._period(i, day=tomorrow, shadow_price=0.55) for i in range(96)],
+        )
+        sys.modules["app"].bess_controller = ctrl  # type: ignore[attr-defined]
+
+        tomorrow_data = _client.get("/api/dashboard").json()["tomorrowData"]
+
+        assert tomorrow_data[0]["shadowPrice"]["value"] == pytest.approx(0.55)
+
+    def test_historical_day_has_no_shadow_price(self) -> None:
+        ctrl = _make_started_controller()
+        ctrl.system.daily_view_store.load_day.return_value = DailyView(
+            date=date(2020, 1, 1),
+            periods=[self._period(i) for i in range(96)],
+            total_savings=0.0,
+            actual_count=0,
+            predicted_count=96,
+        )
+        sys.modules["app"].bess_controller = ctrl  # type: ignore[attr-defined]
+
+        hourly_data = _client.get("/api/dashboard?date=2020-01-01").json()["hourlyData"]
+
+        assert all(p["shadowPrice"] is None for p in hourly_data)
 
 
 class TestDashboardAvailableDates:
@@ -1125,3 +1268,73 @@ def test_hourly_data_exposes_wear_free_net_and_battery_savings():
     # battery_cycle_cost=0.1 — if wear were included this would instead be
     # solar_only_cost - hourly_cost = 6.0 - 2.1 = 3.9).
     assert api_hourly.batterySavings.value == 4.0
+
+
+class TestDashboardFreeImportOnDstFallBack:
+    """On the 25-hour fall-back day the two 02:00 hours share a wall-clock
+    label, so a free-import window covering only the second one must flag only
+    the second one's periods (#833).
+    """
+
+    _DAY = date(2026, 10, 25)
+
+    @classmethod
+    def _period_at(cls, index: int) -> PeriodData:
+        start = datetime.combine(
+            cls._DAY, datetime.min.time(), tzinfo=time_utils.TIMEZONE
+        ).astimezone(UTC) + timedelta(minutes=15 * index)
+        return replace(
+            _make_period(0),
+            period=index,
+            timestamp=start.astimezone(time_utils.TIMEZONE),
+        )
+
+    def test_only_the_second_02_00_hour_is_flagged_free(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(time_utils, "today", lambda: self._DAY)
+        # Second 02:00 hour = 01:00-02:00 UTC = elapsed periods 12-15.
+        window = CalendarWindow(
+            start=datetime(2026, 10, 25, 1, 0, tzinfo=UTC),
+            end=datetime(2026, 10, 25, 2, 0, tzinfo=UTC),
+        )
+        base = datetime.combine(self._DAY, datetime.min.time())
+        entries = apply_free_import_windows(
+            [
+                {
+                    "timestamp": (base + timedelta(minutes=15 * i)).strftime(
+                        "%Y-%m-%d %H:%M"
+                    ),
+                    "price": 1.0,
+                    "buyPrice": 1.0,
+                    "sellPrice": 0.5,
+                }
+                for i in range(100)
+            ],
+            self._DAY,
+            [window],
+            free_price=0.0,
+        )
+        ctrl = _make_started_controller()
+        ctrl.system.get_current_daily_view.return_value = DailyView(
+            date=self._DAY,
+            periods=[self._period_at(i) for i in range(100)],
+            total_savings=0.0,
+            actual_count=0,
+            predicted_count=100,
+        )
+        ctrl.system.price_manager.get_cached_today_prices.return_value = entries
+        ctrl.system.price_manager.get_cached_tomorrow_prices.return_value = []
+        sys.modules["app"].bess_controller = ctrl  # type: ignore[attr-defined]
+
+        resp = _client.get("/api/dashboard?resolution=quarter-hourly")
+        assert resp.status_code == 200
+        hourly = resp.json()["hourlyData"]
+
+        assert len(hourly) == 100
+        assert [i for i, h in enumerate(hourly) if h["isFreeImport"]] == [
+            12,
+            13,
+            14,
+            15,
+        ]
