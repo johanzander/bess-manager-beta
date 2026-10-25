@@ -4,6 +4,13 @@ All notable changes to BESS Battery Manager will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [11.1.1b3] - 2026-10-25
+
+### Fixed
+
+- **ENTSO-e: an incomplete day of prices is no longer planned on** — a leftover `prices_tomorrow` stub no longer creates a flat, idle second day, or hides a complete day published beside it. ([#845](https://github.com/johanzander/bess-manager/issues/845))
+- **DST change days: the scheduler and inverter schedules now follow real time too** — the 15-minute cycle, startup and sensor collection still counted the current period from the wall clock, and TOU / charge-period times were still written as `period // 4`, so after the repeated hour every action ran an hour after the price it was planned on. Growatt MIN no longer programs overlapping segments in the repeated hour, and the dashboard no longer fails with `hour must be in 0..23` for the day's last hour. ([#844](https://github.com/johanzander/bess-manager/pull/844))
+
 ## [11.1.1b2] - 2026-10-25
 
 ### Fixed
