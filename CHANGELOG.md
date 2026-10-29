@@ -4,6 +4,13 @@ All notable changes to BESS Battery Manager will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [11.1.1b4] - 2026-10-29
+
+### Fixed
+
+- **Solis: the per-period update no longer fails with an argument-count error** — the scheduled write and the discharge-inhibit restore now complete instead of raising, so BESS keeps running on Solis. ([#850](https://github.com/johanzander/bess-manager/issues/850))
+- **Planned Schedule no longer logs an error per elapsed hour, nor shows made-up IDLE rows for them** — a mid-day plan has no decision for hours already passed, and the display now treats that as "no discharge authorisation". ([#847](https://github.com/johanzander/bess-manager/issues/847))
+
 ## [11.1.1b3] - 2026-10-25
 
 ### Fixed
