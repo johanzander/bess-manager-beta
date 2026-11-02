@@ -4,9 +4,15 @@ All notable changes to BESS Battery Manager will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [11.1.2b1] - 2026-11-02
+## [11.2.0b1] - 2026-11-02
+
+### Added
+
+- **Dashboard: the Schedule timeline is readable on a phone, with four layouts** — Bar, Rows, List and Bar + Next, switchable from a small control in the card's corner and remembered per browser. Tapping a block now shows its time, SOC change and grid energy, where the old tooltip only worked on hover. ([#849](https://github.com/johanzander/bess-manager/pull/849))
 
 ### Fixed
+
+- **Octopus: export rates that lag import prices no longer stall the system or invent prices** — a short export list (e.g. Cosy import with Agile export) used to abort every cycle and leave the dashboard on "Initializing system", and a missing one silently made sell price equal buy price. The day is now trimmed to the shared periods and re-fetched until the export rates arrive. ([#848](https://github.com/johanzander/bess-manager/pull/848))
 
 - **Settings: refreshing the page with unsaved edits now asks before discarding them** — sensor entities typed but not yet saved are no longer silently lost. ([#857](https://github.com/johanzander/bess-manager/issues/857))
 
