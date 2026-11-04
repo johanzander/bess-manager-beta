@@ -4,6 +4,17 @@ All notable changes to BESS Battery Manager will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [11.2.0b2] - 2026-11-04
+
+### Added
+
+- **Debug export: planned consumption changes shown beside measured managed-load energy** — a bundle now shows whether an EV charger or other managed load followed the blocks you declared. ([#863](https://github.com/johanzander/bess-manager/issues/863))
+
+### Fixed
+
+- **Date selector: day and week labels now follow your browser language** — an English UI no longer shows Swedish weekday and month names. ([#862](https://github.com/johanzander/bess-manager/issues/862))
+- **Debug export: disabled inverter entities no longer log an error each** — they are reported in one line instead. ([#863](https://github.com/johanzander/bess-manager/issues/863))
+
 ## [11.2.0b1] - 2026-11-02
 
 ### Added
