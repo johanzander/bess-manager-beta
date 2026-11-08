@@ -15,6 +15,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - **Inverter page: no more phantom Solar or inflated Grid energy in Schedule Overview** — each row now shows its own measured or planned solar and grid charging. ([#866](https://github.com/johanzander/bess-manager/issues/866))
 - **Solis: Powering Home now follows the house load, and the battery can hold energy for later** — re-run sensor discovery after updating. ([#869](https://github.com/johanzander/bess-manager/issues/869))
 
+## [11.2.0b2] - 2026-11-04
+
+### Added
+
+- **Debug export: planned consumption changes shown beside measured managed-load energy** — a bundle now shows whether an EV charger or other managed load followed the blocks you declared. ([#863](https://github.com/johanzander/bess-manager/issues/863))
+
+### Fixed
+
+- **Date selector: day and week labels now follow your browser language** — an English UI no longer shows Swedish weekday and month names. ([#862](https://github.com/johanzander/bess-manager/issues/862))
+- **Debug export: disabled inverter entities no longer log an error each** — they are reported in one line instead. ([#863](https://github.com/johanzander/bess-manager/issues/863))
+
+## [11.2.0b1] - 2026-11-02
+
+### Added
+
+- **Dashboard: the Schedule timeline is readable on a phone, with four layouts** — Bar, Rows, List and Bar + Next, switchable from a small control in the card's corner and remembered per browser. Tapping a block now shows its time, SOC change and grid energy, where the old tooltip only worked on hover. ([#849](https://github.com/johanzander/bess-manager/pull/849))
+
+### Fixed
+
+- **Octopus: export rates that lag import prices no longer stall the system or invent prices** — a short export list (e.g. Cosy import with Agile export) used to abort every cycle and leave the dashboard on "Initializing system", and a missing one silently made sell price equal buy price. The day is now trimmed to the shared periods and re-fetched until the export rates arrive. ([#848](https://github.com/johanzander/bess-manager/pull/848))
+
+- **Settings: refreshing the page with unsaved edits now asks before discarding them** — sensor entities typed but not yet saved are no longer silently lost. ([#857](https://github.com/johanzander/bess-manager/issues/857))
+
 ## [11.1.1] - 2026-11-01
 
 ### Fixed
