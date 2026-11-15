@@ -1454,21 +1454,43 @@ class HomeAssistantAPIController:
             k: v for k, v in kwargs.items() if k not in ("return_response", "blocking")
         }
 
-        # Make API call
-        return self._api_request(
+        resolved_category = category or (
+            "battery_control"
+            if service_domain in ["number", "input_number", "switch"]
+            else ("inverter_control" if is_vendor_domain else "other")
+        )
+        operation = operation or f"Call {service_domain}.{service_name}"
+
+        result = self._api_request(
             "post",
             path,
-            operation=operation or f"Call {service_domain}.{service_name}",
-            category=category
-            or (
-                "battery_control"
-                if service_domain in ["number", "input_number", "switch"]
-                else ("inverter_control" if is_vendor_domain else "other")
-            ),
+            operation=operation,
+            category=resolved_category,
             context=context,
             suppress_retry_warnings=suppress_retry_warnings,
             json=json_data,
         )
+
+        # #886: every write to the inverter, on every platform, passes through
+        # here, so this is the one place a write is recorded. The compact debug
+        # export keeps lines by the "HARDWARE:" marker alone -- a new write
+        # path needs no filter change to show up in a bundle.
+        if not is_safe_read:
+            logger.info(
+                "HARDWARE: %s (%s.%s %s)",
+                operation,
+                service_domain,
+                service_name,
+                context,
+            )
+
+        # A read succeeding says nothing about whether writes work again.
+        if self.failure_tracker and not is_safe_read:
+            self.failure_tracker.dismiss_by_category_and_entity(
+                resolved_category, context.get("entity_id")
+            )
+
+        return result
 
     def _get_raw_state(self, sensor_name: str) -> str | None:
         """Get raw state string from HA. Returns None if not configured or unavailable."""

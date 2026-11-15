@@ -4,6 +4,20 @@ All notable changes to BESS Battery Manager will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [11.2.0b5] - 2026-11-15
+
+### Added
+
+- **Time-of-day grid tariffs** — enter an hourly grid transport fee, optionally with separate summer and winter profiles, and BESS prices it into every buy decision. ([#861](https://github.com/johanzander/bess-manager/issues/861))
+
+### Fixed
+
+- **Inverter writes that report an error no longer leave the battery in the wrong mode** — the next command is always sent. ([#875](https://github.com/johanzander/bess-manager/issues/875))
+- **Fewer false alarms on the dashboard** — short sensor blips raise no banner, and write-failure banners clear once writes work again. ([#875](https://github.com/johanzander/bess-manager/issues/875))
+- **Debug export: every inverter write now appears in a compact bundle** — Growatt VPP, SolaX VPP and export-limit commands were previously missing, so what BESS sent couldn't be checked. ([#886](https://github.com/johanzander/bess-manager/issues/886))
+- **Solis, Growatt SPH, SolaX: no more "Grid Charge Enabled" warning on every inverter page refresh** — platforms without a grid-charge switch no longer log it as missing configuration. ([#885](https://github.com/johanzander/bess-manager/issues/885))
+- **Solis: Powering Home now covers the whole house load or holds, never part of it** — the battery no longer drains while only partly covering the load. ([#884](https://github.com/johanzander/bess-manager/issues/884))
+
 ## [11.2.0b4] - 2026-11-10
 
 ### Fixed

@@ -203,7 +203,7 @@ These resolve to platform-specific entities via the sensor config (e.g. `grid_ch
 **Price Calculation**:
 
 ```python
-buy_price = (spot_price + markup) * vat_multiplier + additional_costs
+buy_price = (spot_price + markup) * vat_multiplier + additional_costs + grid_tariff[local_hour]
 sell_price = spot_price * export_rate - tax_reduction
 ```
 
@@ -407,7 +407,7 @@ influxdb:
 All other settings are stored in this file and managed via the settings API. Top-level sections:
 
 - **`battery`**: `total_capacity`, `min_soc`, `max_soc`, `max_charge_power_kw`, `max_discharge_power_kw`, `cycle_cost_per_kwh`, `charging_power_rate`, `efficiency_charge`, `efficiency_discharge`
-- **`electricity_price`**: `area`, `markup_rate`, `vat_multiplier`, `additional_costs`, `tax_reduction`, `use_actual_price`
+- **`electricity_price`**: `area`, `markup_rate`, `vat_multiplier`, `additional_costs`, `tax_reduction`, `spot_multiplier`, `export_spot_multiplier`, `grid_tariff_hourly`, `grid_tariff_summer_hourly` (24 hourly fees each; empty = off), `use_actual_price`
 - **`home`**: `max_fuse_current`, `voltage`, `safety_margin`, `phase_count`, `default_hourly`, `currency`, `consumption_strategy`, `power_monitoring_enabled`
 - **`growatt`**: Inverter device ID and integration settings
 - **`sensors`**: Entity ID mappings for all Home Assistant sensors
@@ -679,6 +679,13 @@ The system includes comprehensive health checking:
 - **Energy Balance**: Physics validation of measured energy flows
 - **Optimization Health**: Algorithm convergence and result validation
 - **Hardware Connection**: Inverter communication and control verification
+
+**Banner policy**: the Health page always shows the latest check. The dashboard
+banner waits until a check still finds the problem at least 3 minutes after it
+first appeared, so a bad check (typically integrations still loading after a
+restart) raises nothing and leaves no "Recovered" note. Write-failure banners appear only once a period's
+retries have run out, or once a single service call has used up its attempts,
+and clear on the next successful write to the same entity.
 
 **Severity model**: each component check is governed by two flags —
 `is_required` (is this component critical to the system, used to set the
