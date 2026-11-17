@@ -4,13 +4,10 @@ All notable changes to BESS Battery Manager will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [11.2.0b6] - 2026-11-17
 
 ### Added
 
-- **Time-of-day grid tariffs** — enter an hourly grid transport fee, optionally with separate summer and winter profiles, and BESS prices it into every buy decision. ([#861](https://github.com/johanzander/bess-manager/issues/861))
-- **Debug export: planned consumption changes shown beside measured managed-load energy** — a bundle now shows whether an EV charger or other managed load followed the blocks you declared. ([#863](https://github.com/johanzander/bess-manager/issues/863))
-- **Debug export: Inverter page schedule included** — a bundle now records the Schedule Overview values you saw, so display problems can be checked directly. ([#866](https://github.com/johanzander/bess-manager/issues/866))
 - **Debug-log replay at an earlier time starts from the battery level recorded then** — `mock-run.sh <bundle> HH:MM` no longer plans from the export-time SOC. ([#889](https://github.com/johanzander/bess-manager/issues/889))
 
 ### Fixed
@@ -18,17 +15,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - **Updated electricity prices now reach the plan without a restart** — when a price sensor replaces a full day of prices, such as forecasts swapped for confirmed Nordpool prices, the next optimization uses them. ([#902](https://github.com/johanzander/bess-manager/issues/902))
 - **Nordpool (HACS sensor): prices now use your configured VAT** — with any VAT other than 25%, buy and sell prices were miscalculated after every restart. ([#903](https://github.com/johanzander/bess-manager/issues/903))
 - **Fuse protection on Growatt VPP, SPH, SolaX, Huawei and Solis: no longer shown as fully active** — health and Settings now warn it is planning-only and suggest a lower safety margin. ([#901](https://github.com/johanzander/bess-manager/issues/901))
-- **Inverter writes that report an error no longer leave the battery in the wrong mode** — the next command is always sent. ([#875](https://github.com/johanzander/bess-manager/issues/875))
-- **Fewer false alarms on the dashboard** — short sensor blips raise no banner, and write-failure banners clear once writes work again. ([#875](https://github.com/johanzander/bess-manager/issues/875))
-- **Debug export: every inverter write now appears in a compact bundle** — Growatt VPP, SolaX VPP and export-limit commands were previously missing, so what BESS sent couldn't be checked. ([#886](https://github.com/johanzander/bess-manager/issues/886))
-- **Solis, Growatt SPH, SolaX: no more "Grid Charge Enabled" warning on every inverter page refresh** — platforms without a grid-charge switch no longer log it as missing configuration. ([#885](https://github.com/johanzander/bess-manager/issues/885))
-- **Growatt VPP: the discharge inhibit now stops the battery powering the house** — with an EV charging, a battery-support period holds instead of draining the battery into the car. ([#881](https://github.com/johanzander/bess-manager/issues/881))
-- **Fuse protection: charging no longer jumps back to full power every other minute** — the limit now settles under the fuse rating. ([#877](https://github.com/johanzander/bess-manager/issues/877))
-- **Inverter page: no more phantom Solar or inflated Grid energy in Schedule Overview** — each row now shows its own measured or planned solar and grid charging. ([#866](https://github.com/johanzander/bess-manager/issues/866))
-- **Solis: Powering Home now follows the house load, and the battery can hold energy for later** — the plan covers the whole load or holds, never part of it. Re-run sensor discovery after updating. ([#869](https://github.com/johanzander/bess-manager/issues/869), [#884](https://github.com/johanzander/bess-manager/issues/884))
-- **Date selector: day and week labels now follow your browser language** — an English UI no longer shows Swedish weekday and month names. ([#862](https://github.com/johanzander/bess-manager/issues/862))
-- **Debug export: disabled inverter entities no longer log an error each** — they are reported in one line instead. ([#863](https://github.com/johanzander/bess-manager/issues/863))
-- **Settings: refreshing the page with unsaved edits now asks before discarding them** — sensor entities typed but not yet saved are no longer silently lost. ([#857](https://github.com/johanzander/bess-manager/issues/857))
 
 ## [11.1.1] - 2026-11-01
 
