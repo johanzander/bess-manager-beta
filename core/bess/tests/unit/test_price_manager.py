@@ -121,7 +121,6 @@ def test_controller_price_fetching() -> None:
 
     ha_source = HomeAssistantSource(
         mock_controller,
-        vat_multiplier=1.25,
         entity="sensor.nordpool_kwh_se4_sek_2_10_025",
     )
     pm = PriceManager(
@@ -136,11 +135,11 @@ def test_controller_price_fetching() -> None:
     # Get today's prices (quarterly - 96 periods)
     today_prices = pm.get_today_prices()
     assert len(today_prices) == 96
-    # Note: HomeAssistantSource now removes VAT from prices before returning them
+    # PriceManager strips VAT from the VAT-inclusive HomeAssistantSource prices
     assert today_prices[0]["price"] == 1.0 / 1.25
 
     # Check calculations with the updated formula:
-    base_price = 1.0 / 1.25  # Price after VAT removal in HomeAssistantSource
+    base_price = 1.0 / 1.25  # Price after VAT removal in PriceManager
     expected_buy_price = (base_price + 0.1) * 1.25 + 0.5
     assert today_prices[0]["buyPrice"] == expected_buy_price
 
@@ -151,11 +150,11 @@ def test_controller_price_fetching() -> None:
     # Get tomorrow's prices (quarterly - 96 periods)
     tomorrow_prices = pm.get_tomorrow_prices()
     assert len(tomorrow_prices) == 96
-    # Note: HomeAssistantSource now removes VAT from prices before returning them
+    # PriceManager strips VAT from the VAT-inclusive HomeAssistantSource prices
     assert tomorrow_prices[0]["price"] == 25.0 / 1.25
 
     # Calculate buy price with the updated formula
-    tomorrow_base_price = 25.0 / 1.25  # Price after VAT removal in HomeAssistantSource
+    tomorrow_base_price = 25.0 / 1.25  # Price after VAT removal in PriceManager
     tomorrow_expected_buy_price = (tomorrow_base_price + 0.1) * 1.25 + 0.5
     assert tomorrow_prices[0]["buyPrice"] == tomorrow_expected_buy_price
 
@@ -192,8 +191,13 @@ def test_mock_source() -> None:
     assert today_prices[0]["sellPrice"] == expected_sell_price
 
 
-def test_home_assistant_source_vat_parameter() -> None:
-    """Test that the VAT multiplier parameter in HomeAssistantSource works correctly."""
+def test_home_assistant_source_vat_removed_by_price_manager() -> None:
+    """HomeAssistantSource returns VAT-inclusive prices; PriceManager strips VAT.
+
+    The source declares prices_include_vat and never divides itself, so the
+    multiplier PriceManager holds -- the one settings updates keep current --
+    is the only one applied (#903).
+    """
     mock_controller = MagicMock()
 
     today_date = time_utils.today()
@@ -218,23 +222,20 @@ def test_home_assistant_source_vat_parameter() -> None:
 
     entity = "sensor.nordpool_kwh_se4_sek_2_10_025"
 
-    # Test with default VAT multiplier (1.25)
-    ha_source_default = HomeAssistantSource(
-        mock_controller,
-        vat_multiplier=1.25,
-        entity=entity,
-    )
-    prices_default = ha_source_default.get_prices_for_date(today_date)
-    assert prices_default[0] == 1.6  # 2.0 / 1.25 = 1.6
+    ha_source = HomeAssistantSource(mock_controller, entity=entity)
+    assert ha_source.prices_include_vat is True
+    assert ha_source.get_prices_for_date(today_date)[0] == 2.0  # as published
 
-    # Test with custom VAT multiplier (1.20 for 20% VAT)
-    ha_source_custom = HomeAssistantSource(
-        mock_controller,
-        vat_multiplier=1.20,
-        entity=entity,
-    )
-    prices_custom = ha_source_custom.get_prices_for_date(today_date)
-    assert round(prices_custom[0], 4) == round(2.0 / 1.20, 4)  # ~1.6667
+    for vat in (1.25, 1.20):
+        pm = PriceManager(
+            price_source=ha_source,
+            markup_rate=0.0,
+            vat_multiplier=vat,
+            additional_costs=0.0,
+            tax_reduction=0.0,
+            area="SE4",
+        )
+        assert pm.get_today_prices()[0]["price"] == 2.0 / vat
 
 
 def _quarterly_array(value: float) -> list[float]:
@@ -281,14 +282,12 @@ def test_home_assistant_source_rejects_premarket_tomorrow_mirror() -> None:
 
     mock_controller._api_request = mock_api_request
 
-    ha_source = HomeAssistantSource(
-        mock_controller, vat_multiplier=1.25, entity="sensor.nordpool_x"
-    )
+    ha_source = HomeAssistantSource(mock_controller, entity="sensor.nordpool_x")
 
     # today still resolves from the validated raw path
-    assert ha_source.get_prices_for_date(today_date)[0] == 2.0 / 1.25
+    assert ha_source.get_prices_for_date(today_date)[0] == 2.0
 
-    # tomorrow must be reported unavailable, not returned as today * 1.25
+    # tomorrow must be reported unavailable, not returned as today
     try:
         ha_source.get_prices_for_date(tomorrow_date)
     except PriceDataUnavailableError:
@@ -302,7 +301,6 @@ def test_home_assistant_source_tomorrow_plain_array_used_when_valid() -> None:
 
     This is the shape used by the mock-HA scenarios and by HACS sensor
     configurations that expose ``today``/``tomorrow`` but not ``raw_*``.
-    VAT must still be stripped.
     """
     mock_controller = MagicMock()
     today_date = time_utils.today()
@@ -321,17 +319,15 @@ def test_home_assistant_source_tomorrow_plain_array_used_when_valid() -> None:
 
     mock_controller._api_request = mock_api_request
 
-    ha_source = HomeAssistantSource(
-        mock_controller, vat_multiplier=1.25, entity="sensor.nordpool_x"
-    )
+    ha_source = HomeAssistantSource(mock_controller, entity="sensor.nordpool_x")
 
     prices = ha_source.get_prices_for_date(tomorrow_date)
     assert len(prices) == 96
-    assert prices[0] == 1.5 / 1.25
+    assert prices[0] == 1.5
 
 
 def test_home_assistant_source_tomorrow_from_valid_raw_data_still_works() -> None:
-    """A timestamp-validated ``raw_tomorrow`` array is still accepted, VAT stripped."""
+    """A timestamp-validated ``raw_tomorrow`` array is still accepted."""
     mock_controller = MagicMock()
     today_date = time_utils.today()
     tomorrow_date = today_date + timedelta(days=1)
@@ -352,17 +348,15 @@ def test_home_assistant_source_tomorrow_from_valid_raw_data_still_works() -> Non
 
     mock_controller._api_request = mock_api_request
 
-    ha_source = HomeAssistantSource(
-        mock_controller, vat_multiplier=1.25, entity="sensor.nordpool_x"
-    )
+    ha_source = HomeAssistantSource(mock_controller, entity="sensor.nordpool_x")
 
     prices = ha_source.get_prices_for_date(tomorrow_date)
     assert len(prices) == 96
-    assert prices[0] == 0.8 / 1.25
+    assert prices[0] == 0.8
 
 
-def test_home_assistant_source_today_plain_array_fallback_strips_vat() -> None:
-    """The plain ``today`` array fallback (no ``raw_today``) must strip VAT too."""
+def test_home_assistant_source_today_plain_array_fallback() -> None:
+    """The plain ``today`` array fallback (no ``raw_today``) is used as published."""
     mock_controller = MagicMock()
     today_date = time_utils.today()
 
@@ -373,13 +367,11 @@ def test_home_assistant_source_today_plain_array_fallback_strips_vat() -> None:
 
     mock_controller._api_request = mock_api_request
 
-    ha_source = HomeAssistantSource(
-        mock_controller, vat_multiplier=1.25, entity="sensor.nordpool_x"
-    )
+    ha_source = HomeAssistantSource(mock_controller, entity="sensor.nordpool_x")
 
     prices = ha_source.get_prices_for_date(today_date)
     assert len(prices) == 96
-    assert prices[0] == 2.0 / 1.25
+    assert prices[0] == 2.0
 
 
 def test_get_available_prices_today_only() -> None:
@@ -660,10 +652,13 @@ def test_refresh_cache_populates_today_then_serves_it_from_cache() -> None:
     today = time_utils.today()
     assert source.fetched_dates.count(today) == 1
     assert len(pm.get_cached_today_prices()) == 96
-
-    # A second refresh with today already cached does not re-fetch today.
-    pm.refresh_cache()
+    # Serving the cached day does not fetch.
     assert source.fetched_dates.count(today) == 1
+
+    # Every refresh re-fetches today, so a source that replaces a complete
+    # day reaches the cache (#902).
+    pm.refresh_cache()
+    assert source.fetched_dates.count(today) == 2
 
 
 def test_refresh_cache_swallows_source_failure() -> None:
@@ -737,9 +732,73 @@ def test_cache_only_read_serves_today_in_the_0000_to_0005_gap() -> None:
         assert pm._tomorrow_date == date(2026, 9, 1)
         assert len(pm.get_cached_today_prices()) == 96  # Aug 31 still there
 
-    assert source.fetched_dates == [
-        date(2026, 9, 1)
-    ], "only Sep 1 should have been fetched; Aug 31 came from the promoted cache"
+    # The 00:00 read above fetched nothing; the noon refresh re-fetches both
+    # days (#902).
+    assert source.fetched_dates == [date(2026, 8, 31), date(2026, 9, 1)]
+
+
+# ── #902: a complete cached day is still the source's current truth ───────────
+#
+# A source may publish a complete day and later replace it with different
+# values: a forecast sensor that fills tomorrow before Nordpool publishes and
+# swaps in the confirmed prices at ~13:00, or a market correction. The refresh
+# job used to treat any complete cached day as final, so the optimizer kept
+# planning on the forecast until the add-on restarted.
+
+HELSINKI = ZoneInfo("Europe/Helsinki")
+
+
+def test_confirmed_prices_replace_a_cached_complete_forecast() -> None:
+    source = _DateTrackingSource([1.0] * 96)
+    pm = _tracking_price_manager(source)
+
+    # 13:05 Helsinki (12:05 Oslo): the sensor still holds the forecast.
+    with patch(
+        "core.bess.price_manager.time_utils.now",
+        return_value=datetime(2026, 11, 17, 13, 5, tzinfo=HELSINKI),
+    ):
+        pm.refresh_cache()
+        assert [e["buyPrice"] for e in pm.get_cached_tomorrow_prices()] == [1.0] * 96
+
+    # 14:05: the sensor now holds a complete, different, confirmed day.
+    source.test_prices = [2.0] * 96
+    with patch(
+        "core.bess.price_manager.time_utils.now",
+        return_value=datetime(2026, 11, 17, 14, 5, tzinfo=HELSINKI),
+    ):
+        pm.refresh_cache()
+        # The optimizer's cache-only reads must see the confirmed prices.
+        assert [e["buyPrice"] for e in pm.get_cached_tomorrow_prices()] == [2.0] * 96
+        assert [e["buyPrice"] for e in pm.get_cached_today_prices()] == [2.0] * 96
+
+
+def test_failed_refetch_keeps_the_previously_cached_day() -> None:
+    source = _DateTrackingSource([1.0] * 96)
+    pm = _tracking_price_manager(source)
+    pm.refresh_cache()
+
+    source._unavailable = {time_utils.today()}
+    pm.refresh_cache()  # must not raise
+
+    assert [e["buyPrice"] for e in pm.get_cached_today_prices()] == [1.0] * 96
+
+
+def test_tomorrow_publication_is_not_reached_just_after_midnight_east_of_oslo() -> None:
+    """00:05 Helsinki is 23:05 the previous day in Oslo — 13 h before publication.
+
+    Comparing only the time of day read (23, 5) >= (12, 0) as published.
+    """
+    source = _DateTrackingSource([1.0] * 96)
+    pm = _tracking_price_manager(source)
+
+    with patch(
+        "core.bess.price_manager.time_utils.now",
+        return_value=datetime(2026, 11, 17, 0, 5, tzinfo=HELSINKI),
+    ):
+        pm.refresh_cache()
+        tomorrow = time_utils.today() + timedelta(days=1)
+
+    assert tomorrow not in source.fetched_dates
 
 
 def test_official_nordpool_and_octopus_declare_publication_times() -> None:
@@ -749,7 +808,26 @@ def test_official_nordpool_and_octopus_declare_publication_times() -> None:
     assert OfficialNordpoolSource.TOMORROW_EARLIEST == (12, 0, "Europe/Oslo")
     assert OctopusEnergySource.TOMORROW_EARLIEST == (15, 30, "Europe/London")
     # Base class stays permissive so an unknown source is never gated out.
-    assert PriceSource.TOMORROW_EARLIEST == (0, 0, "UTC")
+    assert PriceSource.TOMORROW_EARLIEST == (0, 0, "Pacific/Kiritimati")
+
+
+def test_base_source_tomorrow_is_never_gated_after_local_midnight() -> None:
+    """The permissive base default must stay open from the user's own midnight."""
+    # Plain MockSource: inherits the base PriceSource.TOMORROW_EARLIEST.
+    pm = PriceManager(
+        price_source=MockSource([1.0] * 96),
+        markup_rate=0.0,
+        vat_multiplier=1.0,
+        additional_costs=0.0,
+        tax_reduction=0.0,
+        area="SE4",
+    )
+    for tz in ("Pacific/Auckland", "Europe/Helsinki", "America/Los_Angeles"):
+        with patch(
+            "core.bess.price_manager.time_utils.now",
+            return_value=datetime(2026, 11, 17, 0, 0, tzinfo=ZoneInfo(tz)),
+        ):
+            assert pm._tomorrow_publication_reached(), tz
 
 
 # ── Octoplus free-import windows composed at read time ────────────────────────
@@ -808,7 +886,6 @@ def test_window_booked_after_prices_are_cached_reaches_the_optimizer_read() -> N
 
     pm.refresh_cache()
     assert all(e["buyPrice"] == 0.30 for e in pm.get_cached_today_prices())
-    fetches_after_warmup = source.fetch_count
 
     windows.windows = [_window_on(today, 11, 12)]
     pm.refresh_cache()
@@ -821,9 +898,6 @@ def test_window_booked_after_prices_are_cached_reaches_the_optimizer_read() -> N
         47,
     ]
     assert all(e["sellPrice"] == entries[0]["sellPrice"] for e in entries)
-    assert (
-        source.fetch_count == fetches_after_warmup
-    ), "cached prices must not be re-fetched"
 
 
 def test_window_is_fetched_for_today_and_tomorrow() -> None:

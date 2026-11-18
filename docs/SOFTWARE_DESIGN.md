@@ -270,7 +270,9 @@ sell_price = spot_price * export_rate - tax_reduction
    └── PriceManager.refresh_cache() fetches today (+ tomorrow, once the
        market has published it) into the cache, synchronously, once
    └── The optimizer thereafter reads prices cache-only; a dedicated
-       scheduler job keeps the cache warm off the control path (#709)
+       scheduler job keeps the cache warm off the control path (#709),
+       re-fetching each cached day so it follows a source that replaces
+       a complete day (#902)
 
 4. Initial Optimization
 
@@ -467,11 +469,13 @@ supports_charge_rate_control: ClassVar[bool] = False
 supports_charge_rate_control: ClassVar[bool] = False
 ```
 
-| Capability | Description | MIN | SPH | SolaX Native | Modbus Growatt MIN |
-|---|---|---|---|---|---|
-| `supports_charge_rate_control` | Per-period charge/discharge rate register | Yes | **No** | **No** | Yes |
+| Capability | Description | MIN | SPH | SolaX Native | Modbus Growatt MIN (TOU) | Modbus Growatt (VPP) | Huawei | Solis |
+|---|---|---|---|---|---|---|---|---|
+| `supports_charge_rate_control` | Per-period charge/discharge rate register | Yes | **No** | **No** | Yes | **No** | **No** | **No** |
 
-SPH controls charge power globally via `write_ac_charge_times(charge_power=100%)`. SolaX native uses VPP active-power commands. Neither has a per-period register that the power monitor can read/write, so fuse protection cannot function.
+SPH controls charge power globally via `write_ac_charge_times(charge_power=100%)`. SolaX native and Growatt VPP mode use active-power commands. None of them has a per-period register the power monitor can read/write, so the real-time fuse guard cannot run there.
+
+BSM exposes this as `realtime_fuse_guard_supported` (#901), the one declaration everything about the real-time fuse guard derives from. `_sync_power_monitor()` keeps a `HomePowerMonitor` in existence exactly when fuse protection is enabled and the guard is supported, re-evaluated at startup, on home-settings changes, and on a control-mode or platform switch. The health check reports `WARNING` when fuse protection is enabled but the guard is unsupported, because only the DP's forecast-based import cap is protecting the fuse there. `GET /api/settings` returns the flag so the Settings page can say so too.
 
 #### Frontend Gating
 
@@ -482,6 +486,8 @@ The frontend disables UI features based on **sensor presence**, which correlates
 - HA Statistics strategy: disabled when `lifetime_load_consumption` sensor is not configured
 
 Sensor-based gating is the right default. A dedicated capabilities API should only be introduced when the frontend needs to gate on something that doesn't map to sensor presence.
+
+Growatt VPP mode is such a case. The `battery_charging_power_rate` entity exists there (it is the TOU-mode register), but the controller never throttles it. The Fuse Protection card therefore reads `realtimeFuseGuardSupported` from `GET /api/settings` and shows a "planning-only protection" note when it is false (#901). The toggle stays enabled, because the DP's import cap still applies.
 
 #### Evolution Path
 
@@ -536,7 +542,7 @@ Both the official HA Nordpool integration and the older HACS custom component (`
 2. **The user selects** which provider to use in the Setup Wizard or Settings page (radio button: "Nord Pool (official HA integration)" vs "Nord Pool (HACS custom sensor)").
 3. **At runtime**, the selected provider determines how prices are fetched:
    - `nordpool_official`: Calls `nordpool.get_prices_for_date` service action (requires `config_entry_id`)
-   - `nordpool`: Reads quarterly prices from a single sensor entity's attributes. The timestamp-validated `raw_today`/`raw_tomorrow` arrays are preferred; otherwise it falls back to the plain `today`/`tomorrow` lists (VAT stripped). Tomorrow's plain list is used only when the sensor's `tomorrow_valid` attribute is true — before Nordpool publishes next-day prices it stays false while `tomorrow` still mirrors `today`, which if trusted inflated cached prices by the VAT multiplier (issue #704).
+   - `nordpool`: Reads quarterly prices from a single sensor entity's attributes. The timestamp-validated `raw_today`/`raw_tomorrow` arrays are preferred; otherwise it falls back to the plain `today`/`tomorrow` lists. Prices are returned VAT-inclusive as published; the source declares `prices_include_vat` and `PriceManager` divides by its own `vat_multiplier`, so the configured VAT is applied by one owner (issue #903). Tomorrow's plain list is used only when the sensor's `tomorrow_valid` attribute is true — before Nordpool publishes next-day prices it stays false while `tomorrow` still mirrors `today`, which if trusted inflated cached prices by the VAT multiplier (issue #704).
 
 #### Stage 2 — Intermediate Identifiers from Entity IDs
 

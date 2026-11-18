@@ -4,6 +4,18 @@ All notable changes to BESS Battery Manager will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [11.2.0b6] - 2026-11-17
+
+### Added
+
+- **Debug-log replay at an earlier time starts from the battery level recorded then** — `mock-run.sh <bundle> HH:MM` no longer plans from the export-time SOC. ([#889](https://github.com/johanzander/bess-manager/issues/889))
+
+### Fixed
+
+- **Updated electricity prices now reach the plan without a restart** — when a price sensor replaces a full day of prices, such as forecasts swapped for confirmed Nordpool prices, the next optimization uses them. ([#902](https://github.com/johanzander/bess-manager/issues/902))
+- **Nordpool (HACS sensor): prices now use your configured VAT** — with any VAT other than 25%, buy and sell prices were miscalculated after every restart. ([#903](https://github.com/johanzander/bess-manager/issues/903))
+- **Fuse protection on Growatt VPP, SPH, SolaX, Huawei and Solis: no longer shown as fully active** — health and Settings now warn it is planning-only and suggest a lower safety margin. ([#901](https://github.com/johanzander/bess-manager/issues/901))
+
 ## [11.2.0b5] - 2026-11-15
 
 ### Added
