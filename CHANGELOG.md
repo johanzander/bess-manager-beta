@@ -11,6 +11,73 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - **Huawei: an idle plan clears old charge/discharge periods from the battery** — huawei_solar rejects an empty TOU list, so the previous plan's periods stayed on the battery and repeated daily. BESS now clears them with a period that applies on no day. ([#914](https://github.com/johanzander/bess-manager/pull/914))
 - **Saving an invalid battery or home setting no longer breaks the next start** — a rejected value, such as a Fuse Protection safety margin of 0, is now refused without being saved. ([#917](https://github.com/johanzander/bess-manager/issues/917))
 
+## [11.2.0b6] - 2026-11-17
+
+### Added
+
+- **Debug-log replay at an earlier time starts from the battery level recorded then** — `mock-run.sh <bundle> HH:MM` no longer plans from the export-time SOC. ([#889](https://github.com/johanzander/bess-manager/issues/889))
+
+### Fixed
+
+- **Updated electricity prices now reach the plan without a restart** — when a price sensor replaces a full day of prices, such as forecasts swapped for confirmed Nordpool prices, the next optimization uses them. ([#902](https://github.com/johanzander/bess-manager/issues/902))
+- **Nordpool (HACS sensor): prices now use your configured VAT** — with any VAT other than 25%, buy and sell prices were miscalculated after every restart. ([#903](https://github.com/johanzander/bess-manager/issues/903))
+- **Fuse protection on Growatt VPP, SPH, SolaX, Huawei and Solis: no longer shown as fully active** — health and Settings now warn it is planning-only and suggest a lower safety margin. ([#901](https://github.com/johanzander/bess-manager/issues/901))
+
+## [11.2.0b5] - 2026-11-15
+
+### Added
+
+- **Time-of-day grid tariffs** — enter an hourly grid transport fee, optionally with separate summer and winter profiles, and BESS prices it into every buy decision. ([#861](https://github.com/johanzander/bess-manager/issues/861))
+
+### Fixed
+
+- **Inverter writes that report an error no longer leave the battery in the wrong mode** — the next command is always sent. ([#875](https://github.com/johanzander/bess-manager/issues/875))
+- **Fewer false alarms on the dashboard** — short sensor blips raise no banner, and write-failure banners clear once writes work again. ([#875](https://github.com/johanzander/bess-manager/issues/875))
+- **Debug export: every inverter write now appears in a compact bundle** — Growatt VPP, SolaX VPP and export-limit commands were previously missing, so what BESS sent couldn't be checked. ([#886](https://github.com/johanzander/bess-manager/issues/886))
+- **Solis, Growatt SPH, SolaX: no more "Grid Charge Enabled" warning on every inverter page refresh** — platforms without a grid-charge switch no longer log it as missing configuration. ([#885](https://github.com/johanzander/bess-manager/issues/885))
+- **Solis: Powering Home now covers the whole house load or holds, never part of it** — the battery no longer drains while only partly covering the load. ([#884](https://github.com/johanzander/bess-manager/issues/884))
+
+## [11.2.0b4] - 2026-11-10
+
+### Fixed
+
+- **Growatt VPP: the discharge inhibit now stops the battery powering the house** — with an EV charging, a battery-support period holds instead of draining the battery into the car. ([#881](https://github.com/johanzander/bess-manager/issues/881))
+- **Fuse protection: charging no longer jumps back to full power every other minute** — the limit now settles under the fuse rating. ([#877](https://github.com/johanzander/bess-manager/issues/877))
+
+## [11.2.0b3] - 2026-11-08
+
+### Added
+
+- **Debug export: Inverter page schedule included** — a bundle now records the Schedule Overview values you saw, so display problems can be checked directly. ([#866](https://github.com/johanzander/bess-manager/issues/866))
+
+### Fixed
+
+- **Inverter page: no more phantom Solar or inflated Grid energy in Schedule Overview** — each row now shows its own measured or planned solar and grid charging. ([#866](https://github.com/johanzander/bess-manager/issues/866))
+- **Solis: Powering Home now follows the house load, and the battery can hold energy for later** — re-run sensor discovery after updating. ([#869](https://github.com/johanzander/bess-manager/issues/869))
+
+## [11.2.0b2] - 2026-11-04
+
+### Added
+
+- **Debug export: planned consumption changes shown beside measured managed-load energy** — a bundle now shows whether an EV charger or other managed load followed the blocks you declared. ([#863](https://github.com/johanzander/bess-manager/issues/863))
+
+### Fixed
+
+- **Date selector: day and week labels now follow your browser language** — an English UI no longer shows Swedish weekday and month names. ([#862](https://github.com/johanzander/bess-manager/issues/862))
+- **Debug export: disabled inverter entities no longer log an error each** — they are reported in one line instead. ([#863](https://github.com/johanzander/bess-manager/issues/863))
+
+## [11.2.0b1] - 2026-11-02
+
+### Added
+
+- **Dashboard: the Schedule timeline is readable on a phone, with four layouts** — Bar, Rows, List and Bar + Next, switchable from a small control in the card's corner and remembered per browser. Tapping a block now shows its time, SOC change and grid energy, where the old tooltip only worked on hover. ([#849](https://github.com/johanzander/bess-manager/pull/849))
+
+### Fixed
+
+- **Octopus: export rates that lag import prices no longer stall the system or invent prices** — a short export list (e.g. Cosy import with Agile export) used to abort every cycle and leave the dashboard on "Initializing system", and a missing one silently made sell price equal buy price. The day is now trimmed to the shared periods and re-fetched until the export rates arrive. ([#848](https://github.com/johanzander/bess-manager/pull/848))
+
+- **Settings: refreshing the page with unsaved edits now asks before discarding them** — sensor entities typed but not yet saved are no longer silently lost. ([#857](https://github.com/johanzander/bess-manager/issues/857))
+
 ## [11.1.1] - 2026-11-01
 
 ### Fixed
