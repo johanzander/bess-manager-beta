@@ -4,35 +4,13 @@ All notable changes to BESS Battery Manager will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
-
-### Added
-
-- **Time-of-day grid tariffs** — enter an hourly grid transport fee, optionally with separate summer and winter profiles, and BESS prices it into every buy decision. ([#861](https://github.com/johanzander/bess-manager/issues/861))
-- **Debug export: planned consumption changes shown beside measured managed-load energy** — a bundle now shows whether an EV charger or other managed load followed the blocks you declared. ([#863](https://github.com/johanzander/bess-manager/issues/863))
-- **Debug export: Inverter page schedule included** — a bundle now records the Schedule Overview values you saw, so display problems can be checked directly. ([#866](https://github.com/johanzander/bess-manager/issues/866))
-- **Debug-log replay at an earlier time starts from the battery level recorded then** — `mock-run.sh <bundle> HH:MM` no longer plans from the export-time SOC. ([#889](https://github.com/johanzander/bess-manager/issues/889))
+## [11.2.0b8] - 2026-11-22
 
 ### Fixed
 
-- **Huawei: an idle plan clears old charge/discharge periods from the battery** — huawei_solar rejects an empty TOU list, so the previous plan's periods stayed on the battery and repeated daily. BESS now clears them with a period that applies on no day. ([#914](https://github.com/johanzander/bess-manager/pull/914))
 - **Fuse protection now also limits battery export** — the plan no longer sends more power to the grid than your fuse allows. ([#910](https://github.com/johanzander/bess-manager/issues/910))
 - **Huawei and Growatt SPH: a schedule write the inverter rejects is retried** — BESS used to treat it as applied, so the battery kept its old periods until the next restart. ([#916](https://github.com/johanzander/bess-manager/issues/916))
-- **Saving an invalid battery or home setting no longer breaks the next start** — a rejected value, such as a Fuse Protection safety margin of 0, is now refused without being saved. ([#917](https://github.com/johanzander/bess-manager/issues/917))
-- **Updated electricity prices now reach the plan without a restart** — when a price sensor replaces a full day of prices, such as forecasts swapped for confirmed Nordpool prices, the next optimization uses them. ([#902](https://github.com/johanzander/bess-manager/issues/902))
-- **Nordpool (HACS sensor): prices now use your configured VAT** — with any VAT other than 25%, buy and sell prices were miscalculated after every restart. ([#903](https://github.com/johanzander/bess-manager/issues/903))
-- **Fuse protection on Growatt VPP, SPH, SolaX, Huawei and Solis: no longer shown as fully active** — Settings now warns it is planning-only and suggests a lower safety margin; System Health notes it without a dashboard banner. ([#901](https://github.com/johanzander/bess-manager/issues/901), [#911](https://github.com/johanzander/bess-manager/issues/911))
-- **Inverter writes that report an error no longer leave the battery in the wrong mode** — the next command is always sent. ([#875](https://github.com/johanzander/bess-manager/issues/875))
-- **Fewer false alarms on the dashboard** — short sensor blips raise no banner, and write-failure banners clear once writes work again. ([#875](https://github.com/johanzander/bess-manager/issues/875))
-- **Debug export: every inverter write now appears in a compact bundle** — Growatt VPP, SolaX VPP and export-limit commands were previously missing, so what BESS sent couldn't be checked. ([#886](https://github.com/johanzander/bess-manager/issues/886))
-- **Solis, Growatt SPH, SolaX: no more "Grid Charge Enabled" warning on every inverter page refresh** — platforms without a grid-charge switch no longer log it as missing configuration. ([#885](https://github.com/johanzander/bess-manager/issues/885))
-- **Growatt VPP: the discharge inhibit now stops the battery powering the house** — with an EV charging, a battery-support period holds instead of draining the battery into the car. ([#881](https://github.com/johanzander/bess-manager/issues/881))
-- **Fuse protection: charging no longer jumps back to full power every other minute** — the limit now settles under the fuse rating. ([#877](https://github.com/johanzander/bess-manager/issues/877))
-- **Inverter page: no more phantom Solar or inflated Grid energy in Schedule Overview** — each row now shows its own measured or planned solar and grid charging. ([#866](https://github.com/johanzander/bess-manager/issues/866))
-- **Solis: Powering Home now follows the house load, and the battery can hold energy for later** — the plan covers the whole load or holds, never part of it. Re-run sensor discovery after updating. ([#869](https://github.com/johanzander/bess-manager/issues/869), [#884](https://github.com/johanzander/bess-manager/issues/884))
-- **Date selector: day and week labels now follow your browser language** — an English UI no longer shows Swedish weekday and month names. ([#862](https://github.com/johanzander/bess-manager/issues/862))
-- **Debug export: disabled inverter entities no longer log an error each** — they are reported in one line instead. ([#863](https://github.com/johanzander/bess-manager/issues/863))
-- **Settings: refreshing the page with unsaved edits now asks before discarding them** — sensor entities typed but not yet saved are no longer silently lost. ([#857](https://github.com/johanzander/bess-manager/issues/857))
+- **Planning-only fuse protection no longer raises a dashboard banner** — System Health still notes it. ([#911](https://github.com/johanzander/bess-manager/issues/911))
 
 ## [11.1.1] - 2026-11-01
 
