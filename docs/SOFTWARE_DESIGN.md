@@ -95,8 +95,9 @@ def start() -> None
   `power_monitoring_enabled` — derives a per-period grid-import cap that
   constrains total import (load + battery charging), forcing the battery to
   cover a load spike via discharge rather than importing past the house's
-  fuse limit. See `docs/agents/bess-knowledge.md`'s "grid import (fuse) cap"
-  section (#429).
+  fuse limit. The same limit caps grid export (#910), since a fuse trips in
+  either direction. See `docs/agents/bess-knowledge.md`'s "grid import (fuse)
+  cap" section (#429).
 - An optional peak-shaving window (`BatterySystemManager.peak_shaving`) — a
   user-configured per-period grid-import cap, active only during a
   configured time window/weekdays, combined with the fuse cap above via
@@ -475,7 +476,7 @@ supports_charge_rate_control: ClassVar[bool] = False
 
 SPH controls charge power globally via `write_ac_charge_times(charge_power=100%)`. SolaX native and Growatt VPP mode use active-power commands. None of them has a per-period register the power monitor can read/write, so the real-time fuse guard cannot run there.
 
-BSM exposes this as `realtime_fuse_guard_supported` (#901), the one declaration everything about the real-time fuse guard derives from. `_sync_power_monitor()` keeps a `HomePowerMonitor` in existence exactly when fuse protection is enabled and the guard is supported, re-evaluated at startup, on home-settings changes, and on a control-mode or platform switch. The health check reports `WARNING` when fuse protection is enabled but the guard is unsupported, because only the DP's forecast-based import cap is protecting the fuse there. `GET /api/settings` returns the flag so the Settings page can say so too.
+BSM exposes this as `realtime_fuse_guard_supported` (#901), the one declaration everything about the real-time fuse guard derives from. `_sync_power_monitor()` keeps a `HomePowerMonitor` in existence exactly when fuse protection is enabled and the guard is supported, re-evaluated at startup, on home-settings changes, and on a control-mode or platform switch. When fuse protection is enabled but the guard is unsupported, the health check reports Power Monitoring as `OK` with a "Planning-only" explanation, because only the DP's forecast-based import cap is protecting the fuse there. It is deliberately not `WARNING`: that is a fixed platform property, not a fault, and every `WARNING` component reaches the dashboard banner on every page open (#911). `GET /api/settings` returns the flag so the Settings page can say so too.
 
 #### Frontend Gating
 

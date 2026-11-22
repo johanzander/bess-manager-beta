@@ -4,6 +4,14 @@ All notable changes to BESS Battery Manager will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [11.2.0b8] - 2026-11-22
+
+### Fixed
+
+- **Fuse protection now also limits battery export** — the plan no longer sends more power to the grid than your fuse allows. ([#910](https://github.com/johanzander/bess-manager/issues/910))
+- **Huawei and Growatt SPH: a schedule write the inverter rejects is retried** — BESS used to treat it as applied, so the battery kept its old periods until the next restart. ([#916](https://github.com/johanzander/bess-manager/issues/916))
+- **Planning-only fuse protection no longer raises a dashboard banner** — System Health still notes it. ([#911](https://github.com/johanzander/bess-manager/issues/911))
+
 ## [11.2.0b7] - 2026-11-22
 
 ### Fixed
