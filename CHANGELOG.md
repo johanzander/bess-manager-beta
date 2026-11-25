@@ -4,6 +4,17 @@ All notable changes to BESS Battery Manager will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [11.2.0b9] - 2026-11-25
+
+### Added
+
+- **Fuse protection can also limit export** — turn on "Also limit export to the fuse" and the plan never exports more than your fuse allows. Off by default. ([#910](https://github.com/johanzander/bess-manager/issues/910))
+
+### Fixed
+
+- **Huawei, Growatt SPH, Solis: the running charge/discharge period always gets a hardware slot** — on busy days, periods that had already ended could take every slot, leaving the battery idle. ([#926](https://github.com/johanzander/bess-manager/issues/926))
+- **Huawei without EMMA: Home Usage shows the real house load instead of 0 W** — live load is derived from solar, grid and battery power when no load sensor is mapped. ([#598](https://github.com/johanzander/bess-manager/issues/598))
+
 ## [11.2.0b8] - 2026-11-22
 
 ### Fixed
